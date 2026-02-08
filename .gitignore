@@ -39,5 +39,11 @@ dist/
 build/
 *.egg
 
-# Markdown (project docs kept out of repo)
+# Text files (project notes / local), keep app deps and data
+*.txt
+!backend/requirements.txt
+!backend/app/data/*.txt
+
+# Markdown (project docs kept out of repo), except main readme
 *.md
+!README.md
