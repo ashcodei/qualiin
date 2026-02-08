@@ -1,0 +1,43 @@
+# Virtual envs
+.venv/
+venv/
+backend/.venv/
+env/
+
+# App storage & DB (local data)
+backend/app/storage/
+backend/storage/
+*.db
+*.sqlite
+*.sqlite3
+
+# Python
+*.pyc
+__pycache__/
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+
+# OS & editors
+.DS_Store
+Thumbs.db
+*.log
+*.local
+.idea/
+.vscode/
+
+# Build / dist
+dist/
+build/
+*.egg
+
+# Markdown (project docs kept out of repo)
+*.md

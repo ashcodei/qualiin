@@ -1,0 +1,18 @@
+fastapi==0.115.8
+uvicorn[standard]==0.30.6
+gunicorn==23.0.0
+pymupdf==1.24.10
+python-multipart==0.0.9
+wordfreq==3.1.1
+rapidfuzz==3.9.6
+itsdangerous
+pyenchant==3.2.2
+# Database: SQLite (stdlib) or PostgreSQL when DATABASE_URL is set
+psycopg2-binary==2.9.10
+# Job queue
+celery[redis]==5.4.0
+redis==5.2.1
+# Object storage (optional)
+boto3==1.35.0
+# Load .env into environment (optional)
+python-dotenv==1.0.1

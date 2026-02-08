@@ -1,0 +1,42 @@
+1. Move off single-node / single-process limits
+Current bottlenecks:
+One process: FastAPI + in-process ThreadPoolExecutor (e.g. MAX_WORKERS = min(4, cpu_count)) in jobs.py — all PDF work and API share one process.
+SQLite in db.py — one file, single-writer, not ideal for many concurrent writers or multiple app instances.
+Local disk — storage/ (originals, annotated PDFs, results) and user_allowlist.txt are on the same machine.
+Scalability direction:
+Run multiple FastAPI workers (e.g. Gunicorn/Uvicorn workers) behind a reverse proxy (Nginx/Traefik) so you can scale out the API.
+Move PDF processing out of the API process into a separate job queue + workers (Celery, RQ, or cloud queues like SQS). The API only enqueues jobs and reads status; workers run process_pdf and write results. That gives you:
+Horizontal scaling of workers (more PDFs in parallel).
+No blocking of API threads by long-running PDF work.
+Replace SQLite with PostgreSQL (or another shared DB) so all API workers and job workers see the same data and you avoid file locking and single-machine limits.
+Optionally put file storage in object storage (S3, GCS, etc.) so multiple app/worker nodes can access the same files without sharing a local disk.
+2. Database and storage
+Connection handling: Right now every call opens a new sqlite3.connect(DB_PATH). Under concurrency you can hit “database is locked”. Use a small connection helper (e.g. thread-local connection or a tiny pool) and short retries on OperationalError. When you move to Postgres, use a proper connection pool (e.g. asyncpg or SQLAlchemy with pool).
+Schema and migrations: Replace ad-hoc ALTER TABLE in init_db() with a real migration table and versioned migrations so you can evolve the schema safely across deployments.
+Caching read-heavy data: e.g. document list and typo counts. Cache in Redis (or in-memory with TTL) and invalidate on upload/delete/reprocess so the API doesn’t hit the DB (and JSON files) on every request.
+3. Background jobs
+Abstract the job layer: Introduce a small JobRunner interface (e.g. submit(job_type, payload) -> job_id). Keep the current ThreadPoolExecutor as one implementation, then add a second implementation that enqueues to Celery/RQ/SQS. The rest of the app (e.g. main.py and jobs.py call sites) talks only to the interface. That lets you scale workers independently and add retries/backoff.
+Idempotency and retries: Make job handlers idempotent and add retries with backoff so transient failures (e.g. Ollama timeout, disk full) don’t leave jobs stuck.
+4. Heavy per-request work
+Highlighted PDF (/api/docs/{doc_id}/annotated.pdf?page=...&hl_left=...): Each request runs add_highlight_to_pdf, opens the PDF, draws, and returns bytes. Under load this is CPU/memory heavy.
+Options: Cache the highlighted PDF by (doc_id, page, bbox) in Redis or object storage with a short TTL; or generate highlights asynchronously and serve cached bytes; or add a rate limit / “last clicked typo only” so you don’t generate too many variants.
+5. File and allowlist access
+User allowlist: user_allowlist.txt in jobs.py is a single file. For multi-user or multi-tenant, move allowlist entries into the DB (e.g. user_id + word) or a per-user store so you avoid file contention and can scale horizontally.
+PDF and JSON paths: When you add multiple workers or nodes, use a shared store (DB blob or object storage) or a shared filesystem so every worker can read/write the same original, annotated, and results paths.
+6. Observability and operations
+Structured logging (with doc_id, user_id, duration) and metrics (request latency, job duration, queue depth, errors) make it easier to find bottlenecks and set alerts.
+Health checks: Endpoint that checks DB and (if used) queue connectivity so the reverse proxy or orchestrator can stop sending traffic to unhealthy instances.
+7. Suggested order of work
+Short term (single machine, more load):
+Add DB connection handling/retries.
+Increase or tune worker threads for the executor.
+Optionally cache document list/typo counts and/or highlighted PDFs.
+Medium term (scale out):
+Introduce a job queue and move process_pdf to workers.
+Replace SQLite with Postgres and use connection pooling.
+Run multiple FastAPI workers behind a reverse proxy.
+Longer term (multi-machine / cloud):
+Put PDFs and results in object storage.
+Move allowlist (and any other per-user state) into the DB or a shared store.
+Add caching (e.g. Redis) and consider CDN for static assets.
+Your ARCHITECTURE_IMPROVEMENTS.md in the repo goes into more detail on code structure (routers, Pydantic models), pipeline modularization, and frontend scaling; the above focuses on what most directly makes the system scalable (processes, DB, jobs, storage, and heavy endpoints).

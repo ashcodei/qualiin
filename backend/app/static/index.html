@@ -1,0 +1,918 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Plan Typo Finder</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0d0f14;
+      --surface: #151820;
+      --surface-elevated: #1a1d28;
+      --border: #252836;
+      --border-focus: #3d4358;
+      --text: #e6e9f0;
+      --text-muted: #8b90a4;
+      --accent: #6366f1;
+      --accent-hover: #818cf8;
+      --danger: #f43f5e;
+      --danger-dim: rgba(244, 63, 94, 0.15);
+      --success: #22c55e;
+      --success-dim: rgba(34, 197, 94, 0.12);
+      --radius: 12px;
+      --radius-sm: 8px;
+      --shadow: 0 4px 24px rgba(0,0,0,0.35);
+      --scrollbar-track: var(--surface);
+      --scrollbar-thumb: var(--border-focus);
+      --scrollbar-thumb-hover: #4d5366;
+    }
+    * { box-sizing: border-box; }
+    .scrollable, .sidebar, .typo-list, .doc-table-wrap, .viewer, .viewer-wrap, .allowlist-panel, .profile-body, .dash-body {
+      scrollbar-width: thin;
+      scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+    }
+    .scrollable::-webkit-scrollbar, .sidebar::-webkit-scrollbar, .typo-list::-webkit-scrollbar,
+    .doc-table-wrap::-webkit-scrollbar, .viewer::-webkit-scrollbar, .viewer-wrap::-webkit-scrollbar, .allowlist-panel::-webkit-scrollbar, .profile-body::-webkit-scrollbar, .dash-body::-webkit-scrollbar {
+      width: 10px; height: 10px;
+    }
+    .scrollable::-webkit-scrollbar-track, .sidebar::-webkit-scrollbar-track, .typo-list::-webkit-scrollbar-track,
+    .doc-table-wrap::-webkit-scrollbar-track, .viewer::-webkit-scrollbar-track, .viewer-wrap::-webkit-scrollbar-track, .allowlist-panel::-webkit-scrollbar-track, .profile-body::-webkit-scrollbar-track, .dash-body::-webkit-scrollbar-track {
+      background: var(--scrollbar-track);
+    }
+    .scrollable::-webkit-scrollbar-thumb, .sidebar::-webkit-scrollbar-thumb, .typo-list::-webkit-scrollbar-thumb,
+    .doc-table-wrap::-webkit-scrollbar-thumb, .viewer::-webkit-scrollbar-thumb, .viewer-wrap::-webkit-scrollbar-thumb, .allowlist-panel::-webkit-scrollbar-thumb, .profile-body::-webkit-scrollbar-thumb, .dash-body::-webkit-scrollbar-thumb {
+      background: var(--scrollbar-thumb); border-radius: 5px; border: 2px solid var(--scrollbar-track);
+    }
+    .scrollable::-webkit-scrollbar-thumb:hover, .sidebar::-webkit-scrollbar-thumb:hover, .typo-list::-webkit-scrollbar-thumb:hover,
+    .doc-table-wrap::-webkit-scrollbar-thumb:hover, .viewer::-webkit-scrollbar-thumb:hover, .viewer-wrap::-webkit-scrollbar-thumb:hover, .allowlist-panel::-webkit-scrollbar-thumb:hover, .profile-body::-webkit-scrollbar-thumb:hover, .dash-body::-webkit-scrollbar-thumb:hover {
+      background: var(--scrollbar-thumb-hover);
+    }
+    body { margin: 0; font-family: "DM Sans", system-ui, sans-serif; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5; }
+
+    .screen { display: none; height: 100vh; flex-direction: column; }
+    .screen.active { display: flex; }
+
+    /* Login & Sign up */
+    #screen-login, #screen-signup {
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .login-card {
+      width: 100%;
+      max-width: 360px;
+      background: var(--surface-elevated);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 32px;
+      box-shadow: var(--shadow);
+    }
+    .login-card h1 { font-size: 20px; margin: 0 0 8px 0; }
+    .login-card .sub { color: var(--text-muted); font-size: 13px; margin-bottom: 24px; }
+    .login-card label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+    .login-card input[type="text"], .login-card input[type="password"] {
+      width: 100%;
+      padding: 12px 14px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--bg);
+      color: var(--text);
+      font-size: 14px;
+      margin-bottom: 16px;
+    }
+    .login-card input:focus { outline: none; border-color: var(--accent); }
+    .login-card .btn { width: 100%; padding: 12px; margin-top: 8px; }
+    .login-error { color: var(--danger); font-size: 13px; margin-top: 12px; display: none; }
+    .login-success { color: var(--success); font-size: 13px; margin-top: 12px; display: none; }
+    .auth-toggle { margin-top: 20px; text-align: center; }
+    .auth-toggle a { color: var(--accent); text-decoration: none; font-size: 13px; cursor: pointer; }
+    .auth-toggle a:hover { text-decoration: underline; }
+
+    /* Dashboard */
+    .dash-header {
+      padding: 16px 24px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--surface);
+    }
+    .dash-header h1 { font-size: 18px; margin: 0; }
+    .dash-header .actions { display: flex; gap: 10px; align-items: center; }
+    .dash-body { flex: 1; overflow: auto; padding: 24px; }
+    .dash-body .row-menu-dropdown.is-fixed { position: fixed; z-index: 1000; }
+    .dash-table-wrap { border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: visible; background: var(--surface-elevated); }
+    .dash-table-wrap table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .dash-table-wrap th, .dash-table-wrap td { text-align: left; padding: 14px 18px; border-bottom: 1px solid var(--border); }
+    .dash-table-wrap th { font-weight: 600; color: var(--text-muted); font-size: 11px; text-transform: uppercase; }
+    .dash-table-wrap tr:last-child td { border-bottom: none; }
+    .dash-table-wrap tr[data-doc]:hover td { background: rgba(255,255,255,0.03); }
+    .dash-table-wrap tr[data-doc] { cursor: pointer; }
+    .dash-desc { color: var(--text-muted); font-size: 12px; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .dash-status-msg { color: var(--text-muted); font-size: 11px; font-weight: 400; margin-left: 6px; }
+    .dash-progress-cell { min-width: 100px; }
+    .dash-progress-wrap {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 100px;
+    }
+    .dash-progress-track {
+      display: inline-block;
+      width: 64px;
+      height: 6px;
+      background: var(--border);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .dash-progress-wrap .dash-progress-bar {
+      display: block;
+      height: 100%;
+      background: var(--accent);
+      border-radius: 3px;
+      transition: width 0.25s ease-out;
+    }
+    .dash-progress-pct { font-size: 12px; color: var(--text-muted); min-width: 2.5em; }
+    .dash-result-btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 32px; height: 28px; padding: 0; border: 1px solid var(--border);
+      background: var(--surface-elevated); color: var(--text);
+      border-radius: var(--radius-sm); cursor: pointer; font-size: 14px;
+    }
+    .dash-result-btn:hover:not(:disabled) { background: var(--border-focus); border-color: var(--accent); color: var(--accent); }
+    .dash-result-btn.dash-cancel-btn:hover:not(:disabled) { border-color: var(--danger); color: var(--danger); }
+    .dash-result-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+    .dash-result-actions { display: inline-flex; align-items: center; gap: 6px; }
+
+    /* Modal */
+    .modal-backdrop {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.6);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .modal-backdrop.active { display: flex; }
+    .modal {
+      width: 100%;
+      max-width: 440px;
+      background: var(--surface-elevated);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+      box-shadow: var(--shadow);
+    }
+    .modal h2 { font-size: 16px; margin: 0 0 20px 0; }
+    .modal label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+    .modal input[type="text"], .modal textarea {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--bg);
+      color: var(--text);
+      font-size: 14px;
+      margin-bottom: 14px;
+      font-family: inherit;
+    }
+    .modal textarea { min-height: 80px; resize: vertical; }
+    .modal input[type="file"] {
+      width: 100%;
+      padding: 10px;
+      border: 1px dashed var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--bg);
+      color: var(--text);
+      font-size: 13px;
+      margin-bottom: 18px;
+    }
+    .modal .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 8px; }
+
+    .btn {
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 600;
+      background: var(--surface-elevated);
+      color: var(--text);
+      border: 1px solid var(--border);
+      padding: 10px 16px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .btn:hover:not(:disabled) { border-color: var(--border-focus); background: var(--border); }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+    .btn-primary .upload-spinner { margin-right: 8px; vertical-align: middle; }
+    .btn-ghost { background: transparent; border-color: transparent; color: var(--text-muted); }
+    .upload-spinner {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: upload-spin 0.7s linear infinite;
+    }
+    @keyframes upload-spin { to { transform: rotate(360deg); } }
+    .upload-loading-hint { font-size: 12px; color: var(--text-muted); margin: 10px 0 0 0; min-height: 1.2em; }
+    .btn-ghost:hover { color: var(--text); }
+    .btn-danger-ghost { background: transparent; border-color: transparent; color: var(--text-muted); }
+    .btn-danger-ghost:hover:not(:disabled) { color: var(--danger); background: var(--danger-dim); }
+
+    .pill { font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 999px; display: inline-block; }
+    .pill.ok { color: var(--success); background: var(--success-dim); }
+    .pill.bad { color: var(--danger); background: var(--danger-dim); }
+    .pill:not(.ok):not(.bad) { color: var(--text-muted); background: var(--surface); border: 1px solid var(--border); }
+    .dash-status-pill { font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 999px; display: inline-block; margin-right: 6px; }
+    .dash-status-pill.dash-status-processing { color: var(--warning, #f59e0b); background: var(--warning-dim, rgba(245, 158, 11, 0.1)); }
+    .dash-reviewer-name { color: var(--text-muted); font-size: 12px; }
+    .dash-visibility-wrap { display: inline-flex; align-items: center; gap: 6px; }
+    .dash-visibility-badge { font-size: 11px; padding: 2px 8px; border-radius: 4px; }
+    .dash-visibility-badge.dash-visibility-public { color: var(--success); background: var(--success-dim); }
+    .dash-visibility-badge.dash-visibility-private { color: var(--text-muted); background: var(--surface); }
+    .dash-visibility-toggle-switch { position: relative; display: inline-block; width: 80px; height: 24px; cursor: pointer; }
+    .dash-visibility-toggle-switch.dash-visibility-readonly { cursor: default; }
+    .dash-visibility-toggle-input { opacity: 0; width: 0; height: 0; }
+    .dash-visibility-toggle-slider {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      transition: 0.3s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .dash-visibility-toggle-label {
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      transition: 0.3s;
+    }
+    .dash-visibility-toggle-input:checked + .dash-visibility-toggle-slider {
+      background-color: var(--success-dim);
+      border-color: var(--success);
+    }
+    .dash-visibility-toggle-input:checked + .dash-visibility-toggle-slider .dash-visibility-toggle-label {
+      color: var(--success);
+    }
+    .dash-visibility-toggle-input:disabled + .dash-visibility-toggle-slider {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    .table-msg { color: var(--text-muted); font-size: 12px; margin-top: 2px; }
+    .user-menu-wrap { position: relative; display: inline-block; }
+    .user-name { color: var(--text); font-size: 14px; font-weight: 500; cursor: pointer; padding: 8px 12px; border-radius: var(--radius); user-select: none; }
+    .user-name:hover { background: var(--surface); }
+    .user-menu-dropdown { position: absolute; right: 0; top: 100%; margin-top: 4px; background: var(--surface-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow); z-index: 100; min-width: 140px; }
+    .user-menu-item { display: block; width: 100%; text-align: left; padding: 10px 14px; background: none; border: none; color: var(--text); cursor: pointer; font-size: 13px; }
+    .user-menu-item:hover { background: var(--surface); }
+
+    /* Profile */
+    #screen-profile { flex-direction: column; }
+    .profile-header {
+      padding: 14px 24px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--surface);
+      flex-shrink: 0;
+    }
+    .profile-header h1 { font-size: 18px; font-weight: 700; margin: 0; }
+    .profile-body { flex: 1; overflow: auto; padding: 32px 24px 40px; }
+    .profile-body-inner { max-width: 520px; margin: 0 auto; }
+    .profile-hero {
+      text-align: center;
+      padding: 24px 0 32px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 28px;
+    }
+    .profile-avatar {
+      width: 120px;
+      height: 120px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--accent) 0%, var(--primary) 100%);
+      color: #fff;
+      font-size: 48px;
+      font-weight: 700;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 16px;
+      line-height: 1;
+      flex-shrink: 0;
+    }
+    .profile-hero-name { font-size: 22px; font-weight: 700; color: var(--text); margin: 0 0 4px; }
+    .profile-hero-username { font-size: 13px; color: var(--text-muted); margin: 0 0 8px; }
+    .profile-hero-company {
+      display: inline-block;
+      font-size: 12px;
+      color: var(--text-muted);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 4px 12px;
+    }
+    .profile-card {
+      background: var(--surface-elevated);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+      margin-bottom: 20px;
+      box-shadow: var(--shadow);
+    }
+    .profile-card:last-child { margin-bottom: 0; }
+    .profile-card h2 { margin: 0 0 20px 0; font-size: 15px; font-weight: 600; color: var(--text); border-bottom: 1px solid var(--border); padding-bottom: 12px; }
+    .profile-card label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; color: var(--text); }
+    .profile-card input[type="text"], .profile-card input[type="password"] {
+      width: 100%;
+      padding: 12px 14px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--bg);
+      color: var(--text);
+      font-size: 14px;
+      margin-bottom: 16px;
+      font-family: inherit;
+    }
+    .profile-card input:focus { outline: none; border-color: var(--accent); }
+    .profile-card .form-actions { margin-top: 20px; }
+    .profile-card .login-error, .profile-card .login-success { margin-top: 12px; margin-bottom: 0; }
+    .th-menu { width: 36px; padding: 8px !important; }
+    .row-menu-wrap { position: relative; }
+    .row-menu-btn { background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 4px 8px; font-size: 16px; line-height: 1; border-radius: 4px; }
+    .row-menu-btn:hover { color: var(--text); background: rgba(255,255,255,0.06); }
+    .row-menu-dropdown { position: absolute; right: 0; top: 100%; margin-top: 2px; background: var(--surface-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow); z-index: 100; min-width: 140px; }
+    .row-menu-dropdown button { display: block; width: 100%; text-align: left; padding: 10px 14px; background: none; border: none; color: var(--text); cursor: pointer; font-size: 13px; }
+    .row-menu-dropdown button:hover { background: var(--danger-dim); color: var(--danger); }
+    .sidebar-docs-card { display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0; max-height: 50%; }
+    .sidebar-docs-card .doc-table-wrap { flex: 1; min-height: 0; overflow: auto; }
+    .sidebar-allowlist-card { display: flex; flex-direction: column; flex: 1 1 0; min-height: 50%; }
+    .allowlist-panel { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; font-size: 12px; }
+    .allowlist-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; border-radius: var(--radius-sm); margin-bottom: 4px; background: rgba(255,255,255,0.02); min-width: 0; }
+    .allowlist-item .word { font-family: "JetBrains Mono", monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .allowlist-item .reinstate-btn { flex-shrink: 0; font-size: 11px; padding: 6px; border: none; background: none; color: var(--text-muted); cursor: pointer; border-radius: var(--radius-sm); line-height: 1; }
+    .allowlist-item .reinstate-btn:hover { color: var(--text); background: rgba(255,255,255,0.08); }
+    .reinstate-icon { display: inline-block; width: 16px; height: 16px; vertical-align: middle; }
+
+    /* Doc view (existing layout) */
+    .layout { display: grid; grid-template-columns: 380px 1fr; height: calc(100vh - 57px); }
+    header {
+      padding: 16px 24px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      background: var(--surface);
+    }
+    header h1 { font-size: 18px; font-weight: 700; margin: 0; }
+    header .tagline { color: var(--text-muted); font-size: 13px; }
+    .sidebar {
+      border-right: 1px solid var(--border);
+      padding: 20px;
+      min-height: 0;
+      overflow: hidden;
+      background: var(--surface);
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+    .card {
+      background: var(--surface-elevated);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px;
+      box-shadow: var(--shadow);
+    }
+    .card-title { font-weight: 600; font-size: 15px; margin-bottom: 4px; }
+    .card-desc { color: var(--text-muted); font-size: 12px; margin-bottom: 14px; }
+    .doc-table-wrap { border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+    .doc-table-wrap.scroll-wrap { overflow: auto; }
+    .doc-table-wrap table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .doc-table-wrap th, .doc-table-wrap td { text-align: left; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+    .doc-table-wrap th { font-weight: 600; color: var(--text-muted); font-size: 11px; text-transform: uppercase; }
+    .doc-table-wrap tr:last-child td { border-bottom: none; }
+    .doc-table-wrap tr:hover td { background: rgba(255,255,255,0.02); }
+    .doc-table-wrap tr[data-doc] { cursor: pointer; }
+    .main { display: flex; flex-direction: column; min-height: 0; background: var(--bg); }
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 20px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      flex-wrap: wrap;
+    }
+    .toolbar select {
+      font-family: inherit;
+      font-size: 13px;
+      background: var(--surface-elevated);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 10px 14px;
+      min-width: 280px;
+    }
+    .toolbar .nav { display: flex; align-items: center; gap: 8px; }
+    .toolbar .muted { color: var(--text-muted); }
+    .toolbar .spacer { flex: 1; }
+    .toolbar a.btn { text-decoration: none; }
+    .content-row { display: flex; flex: 1; min-height: 0; gap: 16px; padding: 16px; }
+    .typo-panel {
+      width: 340px;
+      flex-shrink: 0;
+      min-height: 0;
+      max-height: calc(100vh - 140px);
+      display: flex;
+      flex-direction: column;
+      background: var(--surface-elevated);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .typo-panel-head {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 12px 14px 12px 14px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .typo-panel-title-row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+    .typo-panel-head h3 { font-size: 13px; font-weight: 600; margin: 0; }
+    .typo-nontypo-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+    .typo-toggle-btn { margin: 0; border-radius: 0; border: none; min-width: 72px; }
+    .typo-toggle-btn.is-active { background: var(--accent); color: #fff; }
+    .typo-toggle-btn:not(.is-active):hover { background: var(--surface-elevated); }
+    .typo-item-nontypo .typo-occurrence-list { display: none; }
+    .typo-item-nontypo.is-expanded .typo-occurrence-list { display: block; }
+    .typo-item-nontypo .typo-nontypo-header { cursor: pointer; user-select: none; }
+    .typo-item-nontypo .typo-word-wrap { max-width: 180px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .typo-item-nontypo .word { color: var(--text); font-weight: 600; }
+    .typo-item-nontypo .typo-collapse-icon { font-size: 16px; color: var(--text-muted); transition: transform 0.2s; flex-shrink: 0; }
+    .typo-item-nontypo.is-expanded .typo-collapse-icon { transform: rotate(90deg); }
+    .typo-nontypo-add-btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 22px; height: 22px; padding: 0; border: 1px solid var(--border); border-radius: 4px;
+      background: var(--surface); color: var(--text-muted); font-size: 16px; line-height: 1; cursor: pointer;
+      flex-shrink: 0; opacity: 0; transition: opacity 0.15s; margin-left: auto;
+    }
+    .typo-item-nontypo:hover .typo-nontypo-add-btn { opacity: 1; }
+    .typo-nontypo-add-btn:hover { background: var(--danger-dim); color: var(--danger); border-color: var(--danger); }
+    .typo-occurrence-nontypo { cursor: pointer; }
+    .typo-select-controls { display: flex; align-items: center; gap: 8px; }
+    .typo-select-all {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+    .typo-select-all input[type="checkbox"] {
+      width: 14px;
+      height: 14px;
+    }
+    .typo-meta {
+      color: var(--text-muted);
+      font-size: 12px;
+      padding: 10px 14px 10px 14px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .typo-list-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+    .typo-list-section:first-child { margin-top: 0; padding-top: 0; border-top: none; }
+    .typo-list-section-title { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 8px; padding: 0 2px; }
+    .btn-sm { font-size: 11px; padding: 6px 10px; }
+    .typo-item { position: relative; }
+    .typo-item-main { min-width: 0; display: flex; flex-direction: column; }
+    .typo-main-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .typo-word-wrap {
+      display: flex;
+      align-items: baseline;
+      gap: 4px;
+      min-width: 0;
+    }
+    .typo-count {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+    .typo-check-wrap {
+      visibility: hidden;
+      flex-shrink: 0;
+      margin-left: 8px;
+    }
+    .typo-check-wrap input[type="checkbox"] {
+      width: 14px;
+      height: 14px;
+      cursor: pointer;
+    }
+    .typo-list.has-selection .typo-check-wrap,
+    .typo-item:hover .typo-check-wrap {
+      visibility: visible;
+    }
+    .typo-list { flex: 1 1 0; min-height: 0; overflow-y: auto; margin: 0; padding: 10px 14px 14px 14px; }
+    .typo-item {
+      padding: 10px 12px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      border: 1px solid transparent;
+      margin-bottom: 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .typo-item:last-child { border-bottom: none; }
+    .typo-item:hover { background: rgba(255,255,255,0.04); }
+    .typo-item.selected {
+      border-color: var(--primary);
+      background: rgba(88,166,255,0.06);
+    }
+    .typo-item .word { font-weight: 700; color: var(--danger); font-family: "JetBrains Mono", monospace; }
+    .typo-item .page { color: var(--text-muted); font-size: 12px; }
+    .typo-item .context { font-size: 12px; color: var(--text-muted); margin-top: 4px; line-height: 1.4; }
+    .typo-occurrence-list {
+      margin-top: 4px;
+    }
+    .typo-occurrence {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 2px;
+      line-height: 1.4;
+    }
+    .typo-occurrence-main {
+      flex: 1;
+      min-width: 0;
+    }
+    .typo-occurrence:hover .typo-occurrence-main {
+      text-decoration: underline;
+    }
+    .typo-review-status-badge {
+      font-size: 10px;
+      font-weight: 600;
+      padding: 2px 6px;
+      border-radius: 4px;
+      flex-shrink: 0;
+      white-space: nowrap;
+    }
+    .typo-review-status-badge.typo-review-status-pending {
+      background: var(--surface);
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+    }
+    .typo-review-status-badge.typo-review-status-approved {
+      background: var(--success-dim);
+      color: var(--success);
+    }
+    .typo-review-status-badge.typo-review-status-flagged {
+      background: var(--danger-dim);
+      color: var(--danger);
+    }
+    .viewer-wrap {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .viewer { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; position: relative; }
+    .viewer iframe { flex: 1; width: 100%; height: 100%; min-height: 300px; border: none; background: #e8eaed; position: relative; z-index: 1; }
+    .viewer-placeholder { position: absolute; top: 0; left: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: center; color: var(--text-muted); font-size: 14px; z-index: 0; }
+    .review-panel {
+      flex-shrink: 0;
+      border-top: 1px solid var(--border);
+      background: var(--surface-elevated);
+      padding: 12px 16px;
+      font-size: 12px;
+    }
+    .review-panel-head { font-weight: 600; margin-bottom: 8px; font-size: 13px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .review-panel-word-nav { display: flex; align-items: center; gap: 6px; }
+    .review-panel-chevron {
+      width: 24px; height: 24px; padding: 0; border: none; border-radius: 4px;
+      background: transparent; color: var(--text-muted); font-size: 16px; line-height: 1; cursor: pointer;
+      display: inline-flex; align-items: center; justify-content: center;
+    }
+    .review-panel-chevron:hover:not(:disabled) { background: var(--surface); color: var(--text); }
+    .review-panel-chevron:disabled { opacity: 0.4; cursor: default; }
+    .review-panel-head .review-panel-close {
+      margin-left: auto; width: 24px; height: 24px; padding: 0; border: none; border-radius: 4px;
+      background: transparent; color: var(--text-muted); font-size: 18px; line-height: 1; cursor: pointer;
+    }
+    .review-panel-head .review-panel-close:hover { background: var(--surface); color: var(--text); }
+    .review-panel-nav { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; min-width: 0; }
+    .review-panel-nav-label { font-size: 11px; color: var(--text-muted); flex-shrink: 0; }
+    .review-panel-instance-label { font-size: 11px; color: var(--text-muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-left: 4px; }
+    .review-panel-empty { color: var(--text-muted); font-size: 12px; }
+    .review-panel-word { font-family: "JetBrains Mono", monospace; font-weight: 600; color: var(--danger); min-width: 1em; }
+    .review-panel-context { color: var(--text-muted); margin-bottom: 8px; }
+    .review-panel-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
+    .review-panel-actions .btn { font-size: 11px; padding: 6px 10px; }
+    .review-panel-description { margin-top: 6px; }
+    .review-panel-description label { display: block; margin-bottom: 4px; font-size: 11px; color: var(--text-muted); }
+    .review-panel-description textarea { width: 100%; min-height: 60px; padding: 6px; font-size: 11px; font-family: inherit; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--text); resize: vertical; }
+    .review-status-badge { font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 4px; margin-left: 6px; }
+    .review-status-badge.pending { background: var(--surface); color: var(--text-muted); border: 1px solid var(--border); }
+    .review-status-badge.approved { background: var(--success-dim); color: var(--success); }
+    .review-status-badge.flagged { background: var(--danger-dim); color: var(--danger); }
+  </style>
+</head>
+<body>
+  <!-- Login (route: #/login) -->
+  <div id="screen-login" class="screen">
+    <div class="login-card">
+      <h1>Plan Typo Finder</h1>
+      <p class="sub">Sign in to continue</p>
+      <form id="loginForm">
+        <label for="loginUsername">Username</label>
+        <input type="text" id="loginUsername" name="username" autocomplete="username" required />
+        <label for="loginPassword">Password</label>
+        <input type="password" id="loginPassword" name="password" autocomplete="current-password" required />
+        <button type="submit" class="btn btn-primary">Sign in</button>
+        <p id="loginError" class="login-error">Invalid username or password.</p>
+        <p id="loginSuccess" class="login-success">Account created. Sign in below.</p>
+      </form>
+      <div class="auth-toggle">
+        Don&rsquo;t have an account? <a href="/signup">Sign up</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Sign up (route: #/signup) -->
+  <div id="screen-signup" class="screen">
+    <div class="login-card">
+      <h1>Plan Typo Finder</h1>
+      <p class="sub">Create an account</p>
+      <form id="signUpForm">
+        <label for="signUpFullName">Full name</label>
+        <input type="text" id="signUpFullName" name="full_name" autocomplete="name" placeholder="Your full name" />
+        <label for="signUpCompanyName">Company name</label>
+        <input type="text" id="signUpCompanyName" name="company_name" autocomplete="organization" placeholder="Your company" />
+        <label for="signUpUsername">Username</label>
+        <input type="text" id="signUpUsername" name="username" autocomplete="username" placeholder="At least 2 characters" required />
+        <label for="signUpPassword">Password</label>
+        <input type="password" id="signUpPassword" name="password" autocomplete="new-password" placeholder="At least 6 characters" required />
+        <label for="signUpPasswordConfirm">Confirm password</label>
+        <input type="password" id="signUpPasswordConfirm" name="password_confirm" autocomplete="new-password" placeholder="Re-enter password" required />
+        <button type="submit" class="btn btn-primary">Create account</button>
+        <p id="signUpError" class="login-error"></p>
+      </form>
+      <div class="auth-toggle">
+        Already have an account? <a href="/login">Sign in</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Profile complete modal (for existing users missing full name / company) -->
+  <div id="profileCompleteBackdrop" class="modal-backdrop" style="display:none;">
+    <div class="modal">
+      <h2>Complete your profile</h2>
+      <p class="sub">Please enter your full name and company name so your team can see who processed each document.</p>
+      <form id="profileCompleteForm">
+        <label for="profileFullName">Full name</label>
+        <input type="text" id="profileFullName" name="full_name" autocomplete="name" placeholder="Your full name" required />
+        <label for="profileCompanyName">Company name</label>
+        <input type="text" id="profileCompanyName" name="company_name" autocomplete="organization" placeholder="Your company" required />
+        <div class="modal-actions">
+          <button type="submit" class="btn btn-primary">Save and continue</button>
+        </div>
+        <p id="profileCompleteError" class="login-error"></p>
+      </form>
+    </div>
+  </div>
+
+  <!-- Profile -->
+  <div id="screen-profile" class="screen">
+    <div class="profile-header">
+      <h1>Profile</h1>
+      <a href="/dashboard" class="btn btn-ghost" id="btnBackFromProfile">← Back to dashboard</a>
+    </div>
+    <div class="profile-body">
+      <div class="profile-body-inner">
+        <div class="profile-hero">
+          <div class="profile-avatar" id="profileAvatar" title="Profile initial" aria-hidden="true">?</div>
+          <h2 class="profile-hero-name" id="profileHeroName">User</h2>
+          <p class="profile-hero-username" id="profileHeroUsername">@username</p>
+          <span class="profile-hero-company" id="profileHeroCompany"></span>
+        </div>
+        <div class="profile-card">
+          <h2>Personal Information</h2>
+          <form id="profileForm">
+            <label for="profileFullNameInput">Full name</label>
+            <input type="text" id="profileFullNameInput" name="full_name" autocomplete="name" placeholder="Your full name" />
+            <label for="profileCompanyNameInput">Company</label>
+            <input type="text" id="profileCompanyNameInput" name="company_name" autocomplete="organization" placeholder="Your company" />
+            <div class="form-actions">
+              <button type="submit" class="btn btn-primary">Save changes</button>
+            </div>
+            <p id="profileError" class="login-error"></p>
+            <p id="profileSuccess" class="login-success"></p>
+          </form>
+        </div>
+        <div class="profile-card">
+          <h2>Change password</h2>
+          <form id="passwordForm">
+            <label for="oldPassword">Current password</label>
+            <input type="password" id="oldPassword" name="old_password" autocomplete="current-password" required />
+            <label for="newPassword">New password</label>
+            <input type="password" id="newPassword" name="new_password" autocomplete="new-password" required minlength="6" />
+            <label for="confirmPassword">Confirm new password</label>
+            <input type="password" id="confirmPassword" name="confirm_password" autocomplete="new-password" required minlength="6" />
+            <div class="form-actions">
+              <button type="submit" class="btn btn-primary">Change password</button>
+            </div>
+            <p id="passwordError" class="login-error"></p>
+            <p id="passwordSuccess" class="login-success"></p>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Dashboard -->
+  <div id="screen-dashboard" class="screen">
+    <div class="dash-header">
+      <h1>Plan Typo Finder</h1>
+      <div class="actions">
+        <button type="button" class="btn btn-danger-ghost" id="btnDeleteAll" title="Permanently delete all documents">Delete all</button>
+        <button type="button" class="btn btn-primary" id="btnNewDoc">+ New doc</button>
+        <div class="user-menu-wrap" id="userMenuWrap">
+          <span class="user-name" id="userName">User</span>
+          <div class="user-menu-dropdown" id="userMenuDropdown" style="display:none">
+            <button type="button" class="user-menu-item" id="btnProfile">Profile</button>
+            <button type="button" class="user-menu-item" id="btnLogout">Logout</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="dash-body">
+      <div class="dash-table-wrap">
+        <table>
+          <thead>
+            <tr><th>Name</th><th>Status</th><th>Progress</th><th>Result</th><th>Processed by</th><th>Processed on</th><th>Reviewed by</th><th>Visibility</th><th class="th-menu"></th></tr>
+          </thead>
+          <tbody id="dashTableBody"></tbody>
+        </table>
+      </div>
+      <p id="dashEmpty" class="table-msg" style="margin-top:16px; display:none;">No documents yet. Click &ldquo;+ New doc&rdquo; to add one.</p>
+    </div>
+  </div>
+
+  <!-- New doc modal -->
+  <div id="modalBackdrop" class="modal-backdrop">
+    <div class="modal">
+      <h2>New document</h2>
+      <form id="newDocForm">
+        <label for="newDocName">Name</label>
+        <input type="text" id="newDocName" name="name" placeholder="e.g. Floor plan A1" required />
+        <label for="newDocDesc">Description (optional)</label>
+        <textarea id="newDocDesc" name="description" placeholder="Brief description"></textarea>
+        <label for="newDocVisibility">Visibility</label>
+        <select id="newDocVisibility" name="visibility" title="Public: visible to everyone in your company">
+          <option value="private">Private (only you)</option>
+          <option value="public">Public (visible across company)</option>
+        </select>
+        <label for="newDocFile">PDF file</label>
+        <input type="file" id="newDocFile" name="file" accept="application/pdf" required />
+        <div class="modal-actions">
+          <button type="button" class="btn" id="modalCancel">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="modalSubmit"><span id="modalSubmitLabel">Upload</span></button>
+        </div>
+        <p id="uploadLoadingHint" class="upload-loading-hint" aria-live="polite"></p>
+      </form>
+    </div>
+  </div>
+
+  <!-- Doc view (typo finder) -->
+  <div id="screen-doc" class="screen">
+    <header>
+      <div>
+        <h1>Plan Typo Finder</h1>
+        <span class="tagline">Review typos on the plan</span>
+      </div>
+      <a href="/dashboard" class="btn btn-ghost" id="btnBackToDashboard">← Back to dashboard</a>
+    </header>
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="card sidebar-docs-card">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px">
+            <span class="card-title">Documents</span>
+            <button class="btn" id="refreshBtn">Refresh</button>
+          </div>
+          <div class="card-desc">Click a row to open</div>
+          <div class="doc-table-wrap scroll-wrap">
+            <table>
+              <thead><tr><th>File</th><th>Status</th><th>Result</th></tr></thead>
+              <tbody id="docTable"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card sidebar-allowlist-card">
+          <div class="card-title">Allowlist (discarded terms)</div>
+          <div class="card-desc">Terms you added so they&rsquo;re not flagged. Reinstate to treat as typo again and recheck all docs.</div>
+          <div id="allowlistPanel" class="allowlist-panel"></div>
+        </div>
+      </aside>
+      <main class="main">
+        <div class="toolbar">
+          <div class="nav">
+            <button class="btn" id="prevPageBtn" title="Previous page">◀</button>
+            <span id="pageLabel" class="muted">—</span>
+            <button class="btn" id="nextPageBtn" title="Next page">▶</button>
+          </div>
+          <div class="spacer"></div>
+          <button type="button" class="btn" id="reprocessDocBtn" style="display:none" title="Reprocess document and reset all reviews">Reprocess</button>
+          <button type="button" class="btn" id="regeneratePdfBtn" style="display:none" title="Regenerate PDF with current highlight style (e.g. translucent fill)">Update PDF</button>
+          <a id="openInNewTab" class="btn" href="#" target="_blank" rel="noopener" style="display:none">Open in new tab</a>
+          <a id="downloadLink" class="btn btn-primary" href="#" style="display:none">Download annotated PDF</a>
+        </div>
+        <div class="content-row">
+          <div class="typo-panel">
+            <div class="typo-panel-head">
+              <div class="typo-panel-title-row">
+                <h3 class="typo-panel-title" id="typoPanelTitle">Typos</h3>
+                <div class="typo-nontypo-toggle" role="group" aria-label="List view">
+                  <button type="button" class="btn btn-ghost btn-sm typo-toggle-btn is-active" id="typoListToggleTypos" aria-pressed="true">Typos</button>
+                  <button type="button" class="btn btn-ghost btn-sm typo-toggle-btn" id="typoListToggleNonTypos" aria-pressed="false">Non-typos</button>
+                </div>
+              </div>
+              <div class="typo-select-controls">
+                <label class="typo-select-all">
+                  <input type="checkbox" id="typoSelectAll" />
+                  <span>Select all</span>
+                </label>
+                <button type="button" class="btn btn-ghost btn-sm" id="addAllToAllowlistBtn" title="Add all listed typos to allowlist and recheck">Add all to allowlist</button>
+              </div>
+            </div>
+            <div id="typoMeta" class="typo-meta">Select a document</div>
+            <div id="typoList" class="typo-list"></div>
+          </div>
+          <div class="viewer-wrap">
+            <div class="viewer" id="viewer">
+              <div class="viewer-placeholder" id="viewerPlaceholder">Select a document to view the annotated PDF</div>
+              <iframe id="pdfIframe" title="Annotated PDF" style="display:none"></iframe>
+            </div>
+            <div class="review-panel" id="reviewPanel">
+              <div class="review-panel-empty" id="reviewPanelEmpty">Select a typo to review</div>
+              <div id="reviewPanelContent" style="display:none">
+                <div class="review-panel-head">
+                  <div class="review-panel-word-nav">
+                    <button type="button" class="review-panel-chevron" id="reviewPrevWordBtn" aria-label="Previous word">‹</button>
+                    <span class="review-panel-word" id="reviewWord"></span>
+                    <span class="review-status-badge pending" id="reviewStatusBadge">Pending</span>
+                    <button type="button" class="review-panel-chevron" id="reviewNextWordBtn" aria-label="Next word">›</button>
+                  </div>
+                  <button type="button" class="review-panel-close" id="reviewCloseBtn" aria-label="Close review panel">×</button>
+                </div>
+                <div class="review-panel-nav">
+                  <button type="button" class="review-panel-chevron" id="reviewPrevBtn" aria-label="Previous instance">‹</button>
+                  <span class="review-panel-nav-label" id="reviewNavLabel"></span>
+                  <span class="review-panel-instance-label" id="reviewInstanceLabel"></span>
+                  <button type="button" class="review-panel-chevron" id="reviewNextBtn" aria-label="Next instance">›</button>
+                </div>
+                <div class="review-panel-actions">
+                  <button type="button" class="btn btn-sm" id="reviewApproveBtn">Approve (typo)</button>
+                  <button type="button" class="btn btn-sm" id="reviewApproveAllBtn">Approve all</button>
+                  <button type="button" class="btn btn-sm btn-danger-ghost" id="reviewFlagBtn">Flag (not typo)</button>
+                  <button type="button" class="btn btn-sm btn-danger-ghost" id="reviewFlagAllBtn">Flag all</button>
+                </div>
+                <div class="review-panel-description">
+                  <label for="reviewDescription">Note (optional)</label>
+                  <textarea id="reviewDescription" placeholder="e.g. Intentional abbreviation"></textarea>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

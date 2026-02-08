@@ -1,0 +1,15 @@
+# Example Traefik v2 static config snippet for Plan Typo Finder.
+# Use with: traefik --configFile=traefik.example.yml
+# Backend is Gunicorn (or Uvicorn) on 127.0.0.1:8000.
+
+http:
+  routers:
+    plan-typo:
+      rule: "Host(`typo.local`) || Host(`localhost`)"
+      service: plan-typo-backend
+  services:
+    plan-typo-backend:
+      loadBalancer:
+        servers:
+          - url: "http://127.0.0.1:8000"
+        passHostHeader: true
