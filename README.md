@@ -47,7 +47,12 @@ Default app config uses `llama3.2:3b`. Override with `OLLAMA_MODEL` (e.g. `llama
 
 - Add valid terms: `backend/app/data/abbrev_allowlist.txt`, `domain_allowlist.txt`
 - Tuning: `backend/app/typo/filters.py`
-- Use a `.env` file (see `.env.example`) for secrets and options; do not commit `.env`.
+- **Environment variables:** Copy `env.example` to `.env` (in project root or `backend/`). The app loads `.env` from either location. Do not commit `.env`. The template includes:
+  - **Auth:** `SECRET_KEY`, optional `LOGIN_USER` / `LOGIN_PASSWORD` (default admin)
+  - **Database:** `DATABASE_URL` — leave empty for SQLite; set for PostgreSQL
+  - **Redis:** `REDIS_URL`, optional `CELERY_BROKER_URL` — for Celery and highlight cache; leave empty to use in-memory cache and set `USE_CELERY=0` for thread-pool jobs
+  - **Storage:** `STORAGE_BACKEND=local` (default) or `s3`; for S3 set `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `S3_BUCKET`, optional `S3_PREFIX`
+  - Fill in the empty variables you need; the rest have defaults or are optional.
 
 ## Limitations
 

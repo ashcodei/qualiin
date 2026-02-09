@@ -17,12 +17,12 @@ from typing import Optional
 # OPENAI_MAX_TOKENS = int(os.environ.get("OPENAI_MAX_TOKENS", "10"))
 # OPENAI_ENABLED = bool(OPENAI_API_KEY)
 
-# Ollama: used for app typo decision when OLLAMA_ENABLED=1
-OLLAMA_ENABLED = os.environ.get("OLLAMA_ENABLED", "").strip().lower() in ("1", "true", "yes")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:3b").strip() or "llama3.2:3b"
-OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434").rstrip("/")
-OLLAMA_TIMEOUT = int(os.environ.get("OLLAMA_TIMEOUT", "5"))
-OLLAMA_MAX_TOKENS = int(os.environ.get("OLLAMA_MAX_TOKENS", "10"))
+# Ollama: used for app typo decision when OLLAMA_ENABLED=1. Empty env = use defaults.
+OLLAMA_ENABLED = (os.environ.get("OLLAMA_ENABLED") or "").strip().lower() in ("1", "true", "yes")
+OLLAMA_MODEL = (os.environ.get("OLLAMA_MODEL") or "llama3.2:3b").strip() or "llama3.2:3b"
+OLLAMA_URL = (os.environ.get("OLLAMA_URL") or "http://localhost:11434").rstrip("/")
+OLLAMA_TIMEOUT = int(os.environ.get("OLLAMA_TIMEOUT") or "5")
+OLLAMA_MAX_TOKENS = int(os.environ.get("OLLAMA_MAX_TOKENS") or "10")
 
 
 # def _call_openai(prompt: str) -> Optional[str]:

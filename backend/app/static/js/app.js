@@ -108,6 +108,34 @@ async function api(path, opts = {}) {
   return res;
 }
 
+function showReviewConfirmation() {
+  const toast = document.getElementById("reviewConfirmationToast");
+  if (!toast) return;
+  toast.textContent = "Document marked as reviewed.";
+  toast.classList.add("is-visible");
+  clearTimeout(toast._reviewConfirmationTimer);
+  toast._reviewConfirmationTimer = setTimeout(() => {
+    toast.classList.remove("is-visible");
+    toast.textContent = "";
+  }, 2500);
+}
+
+function updateDocReviewedBy(activeResult) {
+  const el = document.getElementById("docReviewedBy");
+  if (!el) return;
+  const name = activeResult?.review_status?.reviewed_by;
+  if (name) {
+    el.textContent = "Reviewed by " + name;
+    el.style.display = "block";
+  } else {
+    el.style.display = "none";
+    el.textContent = "";
+  }
+}
+
+const downloadIconSvg = "<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\"/><polyline points=\"7 10 12 15 17 10\"/><line x1=\"12\" y1=\"15\" x2=\"12\" y2=\"3\"/></svg>";
+const repeatIconSvg = "<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><polyline points=\"23 4 23 10 17 10\"/><path d=\"M20.49 15a9 9 0 1 1-2.12-9.36L23 10\"/></svg>";
+
 function showScreen(id) {
   screenLogin.classList.remove("active");
   if (screenSignup) screenSignup.classList.remove("active");
@@ -281,7 +309,32 @@ async function loadDashboard() {
   }
   renderDashboardTable();
   const hasRunning = docs.some(d => d.status === "queued" || d.status === "processing");
-  if (hasRunning) setTimeout(loadDashboard, 800);
+  if (hasRunning) setTimeout(pollRunningDocs, 800);
+}
+
+async function pollRunningDocs() {
+  const runningIds = docs.filter(d => d.status === "queued" || d.status === "processing").map(d => d.doc_id);
+  if (!runningIds.length) return;
+  try {
+    const res = await api("/api/docs/status?ids=" + runningIds.join(","));
+    const data = await res.json();
+    const statusDocs = data.docs || [];
+    let needFullRefresh = false;
+    for (const d of statusDocs) {
+      const i = docs.findIndex(x => x.doc_id === d.doc_id);
+      if (i >= 0) {
+        docs[i] = { ...docs[i], ...d };
+        if (d.status === "done" || d.status === "failed") needFullRefresh = true;
+      }
+    }
+    if (needFullRefresh) {
+      await loadDashboard();
+      return;
+    }
+    renderDashboardTable();
+  } catch (_) {}
+  const stillRunning = docs.some(d => d.status === "queued" || d.status === "processing");
+  if (stillRunning) setTimeout(pollRunningDocs, 1500);
 }
 
 function showProfileCompleteModal(fullName, companyName) {
@@ -331,9 +384,15 @@ function renderDashboardTable() {
   let html = "";
   for (const d of docs) {
     const name = escapeHtml((d.name || d.filename || "Untitled").slice(0, 50));
-    const statusLabel = d.status === "processing" && d.message
+    const downloadIcon = d.status === "done"
+      ? ` <a href="/api/docs/${escapeAttr(d.doc_id)}/annotated.pdf?download=true" download class="dash-download-icon" title="Download annotated PDF" aria-label="Download annotated PDF">${downloadIconSvg}</a>`
+      : "";
+    let statusLabel = d.status === "processing" && d.message
       ? statusPill(d.status) + " <span class=\"dash-status-msg\">" + escapeHtml(d.message) + "</span>"
       : statusPill(d.status);
+    if (d.status === "failed") {
+      statusLabel += ` <button type="button" class="dash-reprocess-icon" data-doc="${escapeAttr(d.doc_id)}" title="Reprocess document" aria-label="Reprocess">${repeatIconSvg}</button>`;
+    }
     let resultCell;
     if (d.status === "done" && typeof d.typo_count === "number") {
       resultCell = escapeHtml(String(d.typo_count) + " typos");
@@ -359,8 +418,10 @@ function renderDashboardTable() {
     
     // Only show review status for documents that are done processing
     if (d.status === "done") {
-      if (reviewStatus.is_complete) {
-        // Review complete - show reviewer name
+      const zeroTypos = (d.typo_count || 0) === 0;
+      const docMarkedReviewed = zeroTypos && reviewerId;
+      if (reviewStatus.is_complete || docMarkedReviewed) {
+        // Review complete (all typos reviewed, or 0-typo doc marked as reviewed) - show reviewer name
         reviewedByCell = reviewerName || "—";
       } else if (reviewStatus.reviewed_count > 0 || reviewerId) {
         // Review in progress - show "In progress" pill
@@ -382,10 +443,10 @@ function renderDashboardTable() {
           </span>
         </label>`;
     const menuCells = isOwner
-      ? `<td class="th-menu"><div class="row-menu-wrap"><button type="button" class="row-menu-btn" title="Actions">⋮</button><div class="row-menu-dropdown" style="display:none"><button type="button" class="row-menu-visibility">${vis === "public" ? "Make private" : "Make public"}</button><button type="button" class="row-menu-delete">Delete document</button></div></div></td>`
+      ? `<td class="th-menu"><div class="row-menu-wrap"><button type="button" class="row-menu-btn" title="Actions">⋮</button><div class="row-menu-dropdown" style="display:none"><button type="button" class="row-menu-visibility">${vis === "public" ? "Make private" : "Make public"}</button><button type="button" class="row-menu-reprocess">Reprocess</button><button type="button" class="row-menu-delete">Delete document</button></div></div></td>`
       : `<td class="th-menu"></td>`;
     html += `<tr data-doc="${escapeAttr(d.doc_id)}">
-      <td>${name}</td>
+      <td class="dash-name-cell"><span class="dash-name-text">${name}</span>${downloadIcon}</td>
       <td data-col="status">${statusLabel}</td>
       <td class="dash-progress-cell">${progressCell}</td>
       <td data-col="result">${resultCell}</td>
@@ -459,10 +520,12 @@ function renderDashboardTable() {
       visibilityToggleInput.disabled = true;
       api(`/api/docs/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ visibility: next }) })
         .then(() => {
+          const i = docs.findIndex(d => d.doc_id === id);
+          if (i >= 0) docs[i] = { ...docs[i], visibility: next };
           visibilityToggleInput.setAttribute("data-current", next);
           const label = visibilityToggleInput.closest(".dash-visibility-toggle-switch")?.querySelector(".dash-visibility-toggle-label");
           if (label) label.textContent = next;
-          loadDashboard();
+          renderDashboardTable();
         })
         .catch(err => {
           visibilityToggleInput.checked = current === "public";
@@ -480,11 +543,51 @@ function renderDashboardTable() {
       if (!id) return;
       const next = visibilityMenuBtn.textContent.includes("private") ? "private" : "public";
       api(`/api/docs/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ visibility: next }) })
-        .then(() => loadDashboard())
+        .then(() => {
+          const i = docs.findIndex(d => d.doc_id === id);
+          if (i >= 0) docs[i] = { ...docs[i], visibility: next };
+          renderDashboardTable();
+        })
         .catch(err => alert(err.message || "Update failed"));
     });
+    const reprocessMenuBtn = dropdown?.querySelector(".row-menu-reprocess");
+    reprocessMenuBtn?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      dropdown.style.display = "none";
+      const id = tr.getAttribute("data-doc");
+      if (!id) return;
+      reprocessMenuBtn.disabled = true;
+      api(`/api/docs/${id}/reprocess`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) })
+        .then(async () => {
+          const res = await api(`/api/docs/${id}`);
+          const data = await res.json();
+          const i = docs.findIndex(d => d.doc_id === id);
+          if (i >= 0 && data.doc) docs[i] = { ...docs[i], ...data.doc };
+          renderDashboardTable();
+        })
+        .catch(err => alert(err.message || "Reprocess failed"))
+        .finally(() => { reprocessMenuBtn.disabled = false; });
+    });
+    const reprocessIconBtn = tr.querySelector(".dash-reprocess-icon");
+    reprocessIconBtn?.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const id = tr.getAttribute("data-doc");
+      if (!id) return;
+      reprocessIconBtn.disabled = true;
+      api(`/api/docs/${id}/reprocess`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) })
+        .then(async () => {
+          const res = await api(`/api/docs/${id}`);
+          const data = await res.json();
+          const i = docs.findIndex(d => d.doc_id === id);
+          if (i >= 0 && data.doc) docs[i] = { ...docs[i], ...data.doc };
+          renderDashboardTable();
+        })
+        .catch(err => alert(err.message || "Reprocess failed"))
+        .finally(() => { reprocessIconBtn.disabled = false; });
+    });
     tr.addEventListener("click", (e) => {
-      if (e.target.closest(".row-menu-wrap") || e.target.closest(".dash-result-btn") || e.target.closest(".dash-visibility-toggle-switch")) return;
+      if (e.target.closest(".row-menu-wrap") || e.target.closest(".dash-result-btn") || e.target.closest(".dash-visibility-toggle-switch") || e.target.closest(".dash-download-icon") || e.target.closest(".dash-reprocess-icon")) return;
       const id = tr.getAttribute("data-doc");
       location.href = "/doc/" + id;
     });
@@ -496,7 +599,13 @@ function renderDashboardTable() {
       const id = tr.getAttribute("data-doc");
       if (!id) return;
       pauseBtn.disabled = true;
-      api(`/api/docs/${id}/pause`, { method: "POST" }).then(() => loadDashboard()).catch(err => { pauseBtn.disabled = false; alert(err.message || "Pause failed"); });
+      api(`/api/docs/${id}/pause`, { method: "POST" }).then(async () => {
+        const res = await api(`/api/docs/${id}`);
+        const data = await res.json();
+        const i = docs.findIndex(d => d.doc_id === id);
+        if (i >= 0 && data.doc) docs[i] = { ...docs[i], ...data.doc };
+        renderDashboardTable();
+      }).catch(err => { pauseBtn.disabled = false; alert(err.message || "Pause failed"); });
     });
     playBtn?.addEventListener("click", (e) => {
       e.preventDefault();
@@ -514,7 +623,12 @@ function renderDashboardTable() {
       if (!id) return;
       if (!confirm("Cancel and remove this document? Processing will stop and the document will be deleted. This cannot be undone.")) return;
       cancelBtn.disabled = true;
-      api(`/api/docs/${id}/cancel`, { method: "POST" }).then(() => loadDashboard()).catch(err => { cancelBtn.disabled = false; alert(err.message || "Cancel failed"); });
+      api(`/api/docs/${id}/cancel`, { method: "POST" }).then(() => {
+        docs = docs.filter(d => d.doc_id !== id);
+        renderDashboardTable();
+        if (dashEmpty) dashEmpty.style.display = docs.length ? "none" : "block";
+        if (btnDeleteAll) btnDeleteAll.style.display = docs.length ? "" : "none";
+      }).catch(err => { cancelBtn.disabled = false; alert(err.message || "Cancel failed"); });
     });
   });
 }
@@ -617,7 +731,33 @@ async function refreshDocs() {
   renderDocSelect();
   refreshAllowlistPanel();
   const hasRunning = docs.some(d => d.status === "queued" || d.status === "processing");
-  if (hasRunning) setTimeout(refreshDocs, 1500);
+  if (hasRunning) setTimeout(pollRunningDocsFromDocView, 1500);
+}
+
+async function pollRunningDocsFromDocView() {
+  const runningIds = docs.filter(d => d.status === "queued" || d.status === "processing").map(d => d.doc_id);
+  if (!runningIds.length) return;
+  try {
+    const res = await api("/api/docs/status?ids=" + runningIds.join(","));
+    const data = await res.json();
+    const statusDocs = data.docs || [];
+    let needFullRefresh = false;
+    for (const d of statusDocs) {
+      const i = docs.findIndex(x => x.doc_id === d.doc_id);
+      if (i >= 0) {
+        docs[i] = { ...docs[i], ...d };
+        if (d.status === "done" || d.status === "failed") needFullRefresh = true;
+      }
+    }
+    if (needFullRefresh) {
+      await refreshDocs();
+      return;
+    }
+    renderDocs();
+    renderDocSelect();
+  } catch (_) {}
+  const stillRunning = docs.some(d => d.status === "queued" || d.status === "processing");
+  if (stillRunning) setTimeout(pollRunningDocsFromDocView, 1500);
 }
 
 async function refreshAllowlistPanel() {
@@ -668,10 +808,11 @@ function renderAllowlistPanel(words) {
             const infoRes = await api(`/api/docs/${activeDocId}`);
             const info = await infoRes.json();
             if (info.doc.status === "done") {
-              const res = await api(`/api/docs/${activeDocId}/result`);
+              const res = await api(`/api/docs/${activeDocId}/result?page=1&per_page=2000`);
               activeResult = await res.json();
               totalPages = activeResult.pages || 0;
               typoMeta.textContent = `${activeResult.typo_count} typos · ${activeResult.pages} pages · ${activeResult.runtime_sec}s`;
+              updateDocReviewedBy(activeResult);
               renderTypoList();
               setPdfView(true);
               await refreshDocs();
@@ -695,6 +836,9 @@ function renderDocs() {
   let html = "";
   for (const d of docs) {
     const label = (d.name || d.filename || "Untitled").slice(0, 32);
+    const downloadIcon = d.status === "done"
+      ? ` <a href="/api/docs/${escapeAttr(d.doc_id)}/annotated.pdf?download=true" download class="doc-row-download-icon" title="Download annotated PDF" aria-label="Download annotated PDF" data-doc="${escapeAttr(d.doc_id)}">${downloadIconSvg}</a>`
+      : "";
     let statusLabel = d.status === "processing" && d.message
       ? statusPill(d.status) + " <span class=\"dash-status-msg\">" + escapeHtml(d.message) + "</span>"
       : statusPill(d.status);
@@ -713,7 +857,7 @@ function renderDocs() {
       resultCell = "—";
     }
     html += `<tr data-doc="${escapeAttr(d.doc_id)}">
-      <td title="${escapeHtml(d.filename)}">${escapeHtml(label)}</td>
+      <td class="dash-name-cell" title="${escapeHtml(d.filename)}"><span class="dash-name-text">${escapeHtml(label)}</span>${downloadIcon}</td>
       <td>${statusLabel}</td>
       <td data-col="result">${resultCell}</td>
     </tr>`;
@@ -722,7 +866,7 @@ function renderDocs() {
 
   docTable.querySelectorAll("tr[data-doc]").forEach(tr => {
     tr.addEventListener("click", (e) => {
-      if (e.target.closest(".dash-result-btn")) return;
+      if (e.target.closest(".dash-result-btn") || e.target.closest(".doc-row-download-icon")) return;
       const id = tr.getAttribute("data-doc");
       if (id) location.href = "/doc/" + id;
     });
@@ -827,8 +971,8 @@ function setPdfView(forceReload, opts) {
   const iframeFragment = hash;
   const iframeUrl = iframeFragment ? `${url}#${iframeFragment}` : url;
   // Force reload when we have a highlight so the iframe fetches the PDF with the red box overlay
-  // But don't reload if we're just opening the review panel (no highlight change)
-  const doReload = forceReload || (highlight && (!pdfIframe.src || !pdfIframe.src.includes(url.split("?")[0])));
+  // Always reload when highlight is present since query params (bbox coords) change per click
+  const doReload = forceReload || !!highlight;
   if (doReload || !pdfIframe.src) {
     pdfIframe.src = `${url}${url.includes("?") ? "&" : "?"}t=${Date.now()}${iframeFragment ? "#" + iframeFragment : ""}`;
   } else if (iframeFragment && pdfIframe.src) {
@@ -941,7 +1085,7 @@ async function submitTypoReview(status, description) {
         description: description || null,
       }),
     });
-    const res = await api(`/api/docs/${activeDocId}/result`);
+    const res = await api(`/api/docs/${activeDocId}/result?page=1&per_page=2000`);
     activeResult = await res.json();
     const found = activeResult.typos.find(
       (x) => x.page === t.page && (x.word || "") === (t.word || "") && JSON.stringify(x.bbox_pts || []) === JSON.stringify(t.bbox_pts || [])
@@ -968,7 +1112,7 @@ function navigateReviewPanel(direction) {
   selectedTypoForReview = { typo: t, idx: nextIdx };
   updateReviewPanel(t);
   pageNum = t.page;
-  setPdfView(false, { zoom: 200, bbox_pts: t.bbox_pts, bbox: t.bbox, pageNum: t.page });
+  setPdfView(false, { bbox_pts: t.bbox_pts, bbox: t.bbox, pageNum: t.page });
   renderTypoList();
 }
 
@@ -992,7 +1136,7 @@ function navigateReviewPanelByWord(direction) {
   selectedTypoForReview = { typo: t, idx: firstIdx };
   updateReviewPanel(t);
   pageNum = t.page;
-  setPdfView(false, { zoom: 200, bbox_pts: t.bbox_pts, bbox: t.bbox, pageNum: t.page });
+  setPdfView(false, { bbox_pts: t.bbox_pts, bbox: t.bbox, pageNum: t.page });
   renderTypoList();
 }
 
@@ -1012,7 +1156,7 @@ async function submitTypoReviewAll(status, description) {
         description: description || null,
       }),
     });
-    const res = await api(`/api/docs/${activeDocId}/result`);
+    const res = await api(`/api/docs/${activeDocId}/result?page=1&per_page=2000`);
     activeResult = await res.json();
     const sameWord = activeResult.typos.filter((t) => (t.word || "").trim() === word);
     if (sameWord.length) {
@@ -1038,7 +1182,8 @@ async function selectDoc(docId) {
   selectedAllowlistWords.clear();
   clearReviewPanel();
   typoList.innerHTML = "";
-  typoMeta.textContent = "Loading…";
+    typoMeta.textContent = "Loading…";
+    updateDocReviewedBy(null);
   downloadLink.style.display = "none";
   if (reprocessDocBtn) reprocessDocBtn.style.display = "none";
   if (regeneratePdfBtn) regeneratePdfBtn.style.display = "none";
@@ -1062,7 +1207,7 @@ async function selectDoc(docId) {
     }
 
     hasAnnotatedPdf = !!info.has_annotated;
-    const res = await api(`/api/docs/${docId}/result`);
+    const res = await api(`/api/docs/${docId}/result?page=1&per_page=2000`);
     activeResult = await res.json();
     totalPages = activeResult.pages || 0;
     showNonTyposList = false;
@@ -1075,6 +1220,7 @@ async function selectDoc(docId) {
       typoListToggleNonTypos.setAttribute("aria-pressed", "false");
     }
     typoMeta.textContent = `${activeResult.typo_count} typos · ${activeResult.pages} pages · ${activeResult.runtime_sec}s`;
+    updateDocReviewedBy(activeResult);
 
     downloadLink.href = downloadPdfUrl();
     downloadLink.textContent = hasAnnotatedPdf ? "Download annotated PDF" : "Download PDF";
@@ -1099,6 +1245,7 @@ function showDocProcessingState(progressPct) {
   activeResult = null;
   totalPages = 0;
   if (typoMeta) typoMeta.textContent = typeof progressPct === "number" ? `Processing… ${progressPct}%` : "Processing…";
+  updateDocReviewedBy(null);
   if (typoList) typoList.innerHTML = `<div class="typo-meta">Processing… typo list will update when complete.</div>`;
   if (viewerPlaceholder) {
     viewerPlaceholder.textContent = "Document is re-processing — viewer will update when complete.";
@@ -1136,10 +1283,11 @@ async function addToAllowlistAndRecheck(words) {
       const info = await infoRes.json();
       if (info.doc.status === "done") {
         refreshAllowlistPanel();
-        const res = await api(`/api/docs/${activeDocId}/result`);
+        const res = await api(`/api/docs/${activeDocId}/result?page=1&per_page=2000`);
         activeResult = await res.json();
         totalPages = activeResult.pages || 0;
         typoMeta.textContent = `${activeResult.typo_count} typos · ${activeResult.pages} pages · ${activeResult.runtime_sec}s`;
+        updateDocReviewedBy(activeResult);
         selectedAllowlistWords.clear();
         renderTypoList();
         viewerPlaceholder.style.display = "none";
@@ -1160,8 +1308,10 @@ async function addToAllowlistAndRecheck(words) {
       showDocProcessingState(typeof info.doc.progress === "number" ? info.doc.progress : undefined);
     }
     typoMeta.textContent = "Recheck timed out.";
+    updateDocReviewedBy(null);
   } catch (err) {
     typoMeta.textContent = "Error: " + (err.message || "failed");
+    updateDocReviewedBy(null);
   }
 }
 
@@ -1209,6 +1359,7 @@ function renderTypoList() {
       typoMeta.textContent = nonTypos.length
         ? `${nonTypos.length} non-typos (words not flagged) · ${activeResult.pages || 0} pages`
         : `No non-typos list. Reprocess document to see words that were checked but not flagged.`;
+      updateDocReviewedBy(activeResult);
     }
     if (!typoList) return;
     if (!nonTypos.length) {
@@ -1288,7 +1439,7 @@ function renderTypoList() {
         } catch (_) {}
         if (page && bboxPts.length >= 4) {
           pageNum = page;
-          setPdfView(false, { zoom: 200, bbox_pts: bboxPts, pageNum: page });
+          setPdfView(false, { bbox_pts: bboxPts, pageNum: page });
         }
       });
     });
@@ -1309,7 +1460,7 @@ function renderTypoList() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ occurrences }),
           });
-          const res = await api(`/api/docs/${activeDocId}/result`);
+          const res = await api(`/api/docs/${activeDocId}/result?page=1&per_page=2000`);
           activeResult = await res.json();
           showNonTyposList = false;
           if (typoListToggleTypos) typoListToggleTypos.classList.add("is-active");
@@ -1333,7 +1484,30 @@ function renderTypoList() {
   }
   if (!typoList) return;
   if (!visibleTypos.length) {
-    typoList.innerHTML = `<div class="typo-meta">No typos found (or no text layer).</div>`;
+    const reviewStatus = activeResult?.review_status || {};
+    const alreadyReviewed = !!(reviewStatus.reviewed_by);
+    typoList.innerHTML = `
+      <div class="typo-meta typo-meta-empty">
+        <p>No typos found (or no text layer).</p>
+        ${alreadyReviewed ? "" : `<button type="button" class="btn btn-primary btn-sm typo-reviewed-btn" id="markReviewedBtn">Mark as reviewed</button>`}
+      </div>`;
+    typoList.querySelector(".typo-reviewed-btn")?.addEventListener("click", async () => {
+      if (!activeDocId) return;
+      const btn = typoList.querySelector(".typo-reviewed-btn");
+      if (btn) btn.disabled = true;
+      try {
+        await api(`/api/docs/${activeDocId}/reviewed`, { method: "POST" });
+        showReviewConfirmation();
+        const res = await api(`/api/docs/${activeDocId}/result?page=1&per_page=2000`);
+        activeResult = await res.json();
+        renderTypoList();
+      } catch (err) {
+        alert(err.message || "Failed to mark as reviewed");
+      } finally {
+        const b = typoList.querySelector(".typo-reviewed-btn");
+        if (b) b.disabled = false;
+      }
+    });
     return;
   }
   const limited = visibleTypos.slice(0, 800);
@@ -1447,7 +1621,6 @@ function renderTypoList() {
         updateReviewPanel(t);
         // Don't force reload when opening review panel - just update view
         setPdfView(false, {
-          zoom: 200,
           bbox_pts: t.bbox_pts,
           bbox: t.bbox,
           pageNum: t.page,
@@ -1583,7 +1756,7 @@ if (reprocessDocBtn) {
         const info = await infoRes.json();
         if (info.doc.status === "done") {
           hasAnnotatedPdf = !!info.has_annotated;
-          const res = await api(`/api/docs/${activeDocId}/result`);
+          const res = await api(`/api/docs/${activeDocId}/result?page=1&per_page=2000`);
           activeResult = await res.json();
           totalPages = activeResult.pages || 0;
           typoMeta.textContent = `${activeResult.typo_count} typos · ${activeResult.pages} pages · ${activeResult.runtime_sec}s`;
@@ -1607,13 +1780,16 @@ if (reprocessDocBtn) {
         }
         if (info.doc.status === "failed") {
           typoMeta.textContent = "Reprocess failed.";
+          updateDocReviewedBy(null);
           return;
         }
         showDocProcessingState(typeof info.doc.progress === "number" ? info.doc.progress : undefined);
       }
       typoMeta.textContent = "Reprocess timed out.";
+      updateDocReviewedBy(null);
     } catch (err) {
       typoMeta.textContent = "Error: " + (err.message || "failed");
+      updateDocReviewedBy(null);
     } finally {
       reprocessDocBtn.disabled = false;
       reprocessDocBtn.textContent = prevText;

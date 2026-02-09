@@ -13,6 +13,7 @@ from .db import (
     get_doc,
     list_docs,
     delete_doc as db_delete_doc,
+    delete_docs_batch,
     set_doc_celery_task_id,
     set_doc_processed_at,
     set_doc_typo_count,
@@ -159,6 +160,12 @@ def _run_pdf_job(
                 )
                 store.put(keys["annotated"], out_pdf.read_bytes())
                 store.put(keys["result"], out_json.read_text(encoding="utf-8").encode("utf-8"))
+                typos = result.get("typos") or []
+                typo_words = list({str(t.get("word") or "").strip().lower() for t in typos if t.get("word")})
+                try:
+                    store.put(f"typo_words/{doc_id}.json", json.dumps(typo_words).encode("utf-8"))
+                except Exception:
+                    pass
                 try:
                     store.delete(f"added_typos/{doc_id}.json")
                 except Exception:
@@ -345,12 +352,41 @@ def delete_doc_completely(doc_id: str) -> bool:
 
 
 def delete_all_docs(owner_id: Optional[str] = None, company_name: Optional[str] = None) -> int:
-    """Permanently delete all documents for owner_id (or all if owner_id None). Returns count deleted."""
-    deleted = 0
-    for d in list(list_docs(owner_id=owner_id, company_name=company_name)):
-        doc_id = d.get("doc_id")
-        if doc_id and cancel_doc(doc_id):
-            deleted += 1
+    """Permanently delete all documents for owner_id (or all if owner_id None). Returns count deleted. Batched."""
+    docs = list(list_docs(owner_id=owner_id, company_name=company_name))
+    if not docs:
+        return 0
+    doc_ids = [d["doc_id"] for d in docs if d.get("doc_id")]
+    if not doc_ids:
+        return 0
+    store = storage()
+    # Revoke Celery tasks for running docs
+    if USE_CELERY:
+        try:
+            from .celery_app import celery_app
+            for d in docs:
+                task_id = (d.get("celery_task_id") or "").strip()
+                if task_id and (d.get("status") or "").strip() in ("queued", "processing"):
+                    try:
+                        celery_app.control.revoke(task_id, terminate=True)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+    # Delete storage keys for each doc
+    for doc_id in doc_ids:
+        keys = _keys(doc_id)
+        for k in ("original", "annotated", "result"):
+            try:
+                store.delete(keys[k])
+            except Exception:
+                pass
+        for suffix in [f"results/{doc_id}.error.txt", f"added_typos/{doc_id}.json", f"typo_words/{doc_id}.json"]:
+            try:
+                store.delete(suffix)
+            except Exception:
+                pass
+    deleted = delete_docs_batch(doc_ids)
     return deleted
 
 

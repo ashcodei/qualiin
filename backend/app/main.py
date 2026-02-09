@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Request, Body
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.middleware.sessions import SessionMiddleware
@@ -15,6 +15,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from .db import (
     init_db,
     get_doc,
+    get_docs_status,
     list_docs,
     create_user,
     verify_user,
@@ -46,10 +47,10 @@ from .storage_backend import storage
 from .pdf_highlight_cache import get_highlight_cache, get_highlight_rate_limit, make_cache_key
 from .config import MAX_UPLOAD_MB, USE_SECURE_SESSION_COOKIES
 
-SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-change-in-production")
+SECRET_KEY = os.environ.get("SECRET_KEY") or "dev-secret-change-in-production"
 # Optional: create default admin if no users exist (set LOGIN_USER + LOGIN_PASSWORD in env)
-LOGIN_USER = os.environ.get("LOGIN_USER", "")
-LOGIN_PASSWORD = os.environ.get("LOGIN_PASSWORD", "")
+LOGIN_USER = (os.environ.get("LOGIN_USER") or "").strip()
+LOGIN_PASSWORD = (os.environ.get("LOGIN_PASSWORD") or "").strip()
 
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 
@@ -340,6 +341,17 @@ async def create_doc(
     return {"doc_id": doc_id, "filename": file.filename, "name": name, "description": desc, "visibility": vis}
 
 
+@app.get("/api/docs/status")
+def docs_status(ids: str = "", current_user: str = Depends(require_user)):
+    """Lightweight poll: return status/progress for given doc ids (comma-separated). Only docs the user can access."""
+    user_id, company_name = get_user_id_and_company(current_user)
+    doc_ids = [x.strip() for x in ids.split(",") if x.strip()]
+    if not doc_ids:
+        return {"docs": []}
+    docs = get_docs_status(doc_ids, owner_id=user_id, company_name=company_name)
+    return {"docs": docs}
+
+
 @app.get("/api/docs")
 def docs_list(current_user: str = Depends(require_user)):
     user_id, company_name = get_user_id_and_company(current_user)
@@ -370,6 +382,10 @@ def docs_list(current_user: str = Depends(require_user)):
                     total = 0
                     d["typo_count"] = None
             d["review_status"] = _build_review_status(reviews_batch.get(d["doc_id"], {}), total or 0)
+            # For docs with 0 typos, "reviewed" is when document.reviewed_by is set (e.g. from "Mark as reviewed").
+            if (total or 0) == 0 and d.get("reviewed_by"):
+                d["review_status"]["is_complete"] = True
+                d["review_status"]["reviewed_by"] = d.get("reviewed_by_full_name") or d.get("reviewed_by")
     else:
         for d in docs:
             d["review_status"] = default_review
@@ -440,7 +456,14 @@ def _typo_id(typo: Dict[str, Any]) -> str:
 
 
 @app.get("/api/docs/{doc_id}/result")
-def result(doc_id: str, current_user: str = Depends(require_user)):
+def result(
+    doc_id: str,
+    page: int = 1,
+    per_page: int = 100,
+    current_user: str = Depends(require_user),
+):
+    """Return result with typos merged with reviews. Optional pagination: page (1-based), per_page (default 100, max 500)."""
+    per_page = min(500, max(1, per_page))
     user_id, company_name = get_user_id_and_company(current_user)
     d = get_doc(doc_id, owner_id=user_id, company_name=company_name)
     if not d:
@@ -462,11 +485,27 @@ def result(doc_id: str, current_user: str = Depends(require_user)):
         r = reviews.get(tid)
         t["review"] = r if r else {"status": "pending", "description": None, "reviewed_by": None, "reviewed_at": None}
         typos.append(t)
-    data["typos"] = typos
-    review_status = get_doc_review_status(doc_id, len(typos))
+    total_typos = len(typos)
+    typo_count_effective = sum(1 for t in typos if (t.get("review") or {}).get("status") != "flagged")
+    review_status = get_doc_review_status(doc_id, total_typos)
+    # For 0-typo docs, "reviewed" is when document.reviewed_by is set (e.g. "Mark as reviewed").
+    if total_typos == 0 and d.get("reviewed_by"):
+        review_status["is_complete"] = True
+        review_status["reviewed_by"] = get_user_full_name(d["reviewed_by"]) or d["reviewed_by"]
+    # For docs with typos, reviewed_by from typo_reviews is username; resolve to full_name for display
+    if total_typos > 0 and review_status.get("reviewed_by"):
+        row = get_user_by_username(review_status["reviewed_by"])
+        if row:
+            review_status["reviewed_by"] = (row[4] or "").strip() or row[1]
+    # Paginate typos
+    offset = (page - 1) * per_page
+    typos_slice = typos[offset : offset + per_page]
+    data["typos"] = typos_slice
     data["review_status"] = review_status
-    # Count only non-rejected typos (pending + approved)
-    data["typo_count"] = sum(1 for t in typos if (t.get("review") or {}).get("status") != "flagged")
+    data["typo_count"] = typo_count_effective
+    data["total_typos"] = total_typos
+    data["page"] = page
+    data["per_page"] = per_page
     return JSONResponse(content=data)
 
 
@@ -523,12 +562,13 @@ def _effective_typo_count(doc_id: str) -> int:
     return sum(1 for t in all_typos if (reviews.get(_typo_id(t)) or {}).get("status") != "flagged")
 
 
-def _regenerate_annotated_for_doc(doc_id: str) -> None:
-    """Regenerate the annotated PDF, drawing red boxes only for non-flagged typos plus user-added typos."""
+def _regenerate_annotated_for_doc(doc_id: str) -> Optional[int]:
+    """Regenerate the annotated PDF, drawing red boxes only for non-flagged typos plus user-added typos.
+    Returns the effective typo count (visible typos) so callers can set_doc_typo_count without reloading; None if no result."""
     p = paths_for(doc_id)
     store = storage()
     if not store.exists(p["result"]):
-        return
+        return None
     data = json.loads(store.get(p["result"]).decode("utf-8"))
     typos = data.get("typos") or []
     reviews = get_typo_reviews_for_doc(doc_id)
@@ -546,6 +586,7 @@ def _regenerate_annotated_for_doc(doc_id: str) -> None:
         if r and r.get("status") == "flagged":
             continue
         visible_typos.append(dict(t))
+    effective_count = len(visible_typos)
     # Get original PDF path and regenerate
     if "_local_original" in p and "_local_annotated" in p:
         regenerate_annotated_pdf(
@@ -573,6 +614,7 @@ def _regenerate_annotated_for_doc(doc_id: str) -> None:
             stale = [k for k in cache._data if k.startswith(doc_id + ":")]
             for k in stale:
                 del cache._data[k]
+    return effective_count
 
 
 @app.post("/api/docs/{doc_id}/typos/review")
@@ -591,9 +633,10 @@ def typo_review(doc_id: str, body: TypoReviewBody, request: Request, current_use
     doc = get_doc(doc_id)
     if doc and not doc.get("reviewed_by"):
         set_doc_reviewed_by(doc_id, user_id)
-    # Regenerate annotated PDF excluding flagged typos
-    _regenerate_annotated_for_doc(doc_id)
-    set_doc_typo_count(doc_id, _effective_typo_count(doc_id))
+    # Regenerate annotated PDF excluding flagged typos (returns effective count to avoid reloading)
+    effective = _regenerate_annotated_for_doc(doc_id)
+    if effective is not None:
+        set_doc_typo_count(doc_id, effective)
     return {"ok": True, "typo_id": tid, "status": body.status}
 
 
@@ -616,8 +659,9 @@ def typo_review_batch(doc_id: str, body: TypoReviewBatchBody, request: Request, 
         doc = get_doc(doc_id)
         if doc and not doc.get("reviewed_by"):
             set_doc_reviewed_by(doc_id, user_id)
-        _regenerate_annotated_for_doc(doc_id)
-        set_doc_typo_count(doc_id, _effective_typo_count(doc_id))
+        effective = _regenerate_annotated_for_doc(doc_id)
+        if effective is not None:
+            set_doc_typo_count(doc_id, effective)
     return {"ok": True, "count": len(items), "status": body.status}
 
 
@@ -654,8 +698,9 @@ def typo_restore(doc_id: str, body: TypoRestoreBody, current_user: str = Depends
     typo = {"page": body.page, "word": body.word or "", "bbox_pts": body.bbox_pts or []}
     tid = _typo_id(typo)
     delete_typo_review(doc_id, tid)
-    _regenerate_annotated_for_doc(doc_id)
-    set_doc_typo_count(doc_id, _effective_typo_count(doc_id))
+    effective = _regenerate_annotated_for_doc(doc_id)
+    if effective is not None:
+        set_doc_typo_count(doc_id, effective)
     return {"ok": True, "typo_id": tid}
 
 
@@ -874,8 +919,8 @@ def annotated(
             content_disposition_type=disposition,
             headers=no_store_headers,
         )
-    return Response(
-        content=store.get(p["annotated"]),
+    return StreamingResponse(
+        store.get_stream(p["annotated"]),
         media_type="application/pdf",
         headers={**no_store_headers, "Content-Disposition": f'{disposition}; filename="{doc_id}.annotated.pdf"'},
     )

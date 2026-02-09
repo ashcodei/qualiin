@@ -496,6 +496,30 @@
       border-bottom: 1px solid var(--border);
       flex-shrink: 0;
     }
+    .typo-meta-empty p { margin: 0 0 10px 0; }
+    .typo-meta-empty p:last-child { margin-bottom: 0; }
+    .typo-reviewed-badge { color: var(--success); font-size: 12px; }
+    .typo-reviewed-by { color: var(--success); }
+    .dash-name-cell { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .dash-name-text { min-width: 0; }
+    .dash-download-icon { flex-shrink: 0; color: var(--text-muted); padding: 4px; border-radius: var(--radius-sm); }
+    .dash-download-icon:hover { color: var(--accent); background: var(--surface-elevated); }
+    .dash-reprocess-icon { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; margin-left: 4px; padding: 4px; border: none; background: none; color: var(--text-muted); border-radius: var(--radius-sm); cursor: pointer; vertical-align: middle; }
+    .dash-reprocess-icon:hover { color: var(--accent); background: var(--surface-elevated); }
+    .dash-reprocess-icon:disabled { opacity: 0.6; cursor: not-allowed; }
+    .doc-row-download-icon { margin-left: auto; color: var(--text-muted); padding: 2px 6px; border-radius: var(--radius-sm); }
+    .doc-row-download-icon:hover { color: var(--accent); background: var(--surface-elevated); }
+    .review-confirmation-toast {
+      display: none;
+      padding: 10px 14px;
+      margin: 0 0 8px 0;
+      background: var(--success-dim);
+      color: var(--success);
+      font-size: 13px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--success);
+    }
+    .review-confirmation-toast.is-visible { display: block; }
     .typo-list-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
     .typo-list-section:first-child { margin-top: 0; padding-top: 0; border-top: none; }
     .typo-list-section-title { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 8px; padding: 0 2px; }
@@ -870,6 +894,8 @@
               </div>
             </div>
             <div id="typoMeta" class="typo-meta">Select a document</div>
+            <div id="docReviewedBy" class="typo-meta typo-reviewed-by" style="display:none" aria-live="polite"></div>
+            <div id="reviewConfirmationToast" class="review-confirmation-toast" role="status" aria-live="polite"></div>
             <div id="typoList" class="typo-list"></div>
           </div>
           <div class="viewer-wrap">

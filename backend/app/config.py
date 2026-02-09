@@ -18,7 +18,7 @@ except ImportError:
     pass
 
 # Database: use PostgreSQL when DATABASE_URL is set, else SQLite
-DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+DATABASE_URL = (os.environ.get("DATABASE_URL") or "").strip()
 
 # Debug: Log DATABASE_URL (without password) to help troubleshoot connection issues
 if DATABASE_URL:
@@ -31,12 +31,15 @@ if DATABASE_URL:
         print(f"[Config] DATABASE_URL loaded: {safe_url}", file=sys.stderr)
     except Exception:
         pass
-DB_MAX_RETRIES = int(os.environ.get("DB_MAX_RETRIES", "5"))
-DB_RETRY_SLEEP_SECONDS = float(os.environ.get("DB_RETRY_SLEEP_SECONDS", "0.1"))
+DB_MAX_RETRIES = int(os.environ.get("DB_MAX_RETRIES") or "5")
+DB_RETRY_SLEEP_SECONDS = float(os.environ.get("DB_RETRY_SLEEP_SECONDS") or "0.1")
+# Connection pool size for PostgreSQL (only when DATABASE_URL is set).
+DB_POOL_SIZE = max(1, int(os.environ.get("DB_POOL_SIZE") or "10"))
 
-# Redis / Celery (required when using Celery workers)
+# Redis / Celery. Default when unset = redis://localhost:6379/0. Set REDIS_URL= (empty) to disable Redis.
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0").strip()
-CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", REDIS_URL).strip()
+_CELERY_BROKER_RAW = (os.environ.get("CELERY_BROKER_URL") or "").strip()
+CELERY_BROKER_URL = _CELERY_BROKER_RAW or REDIS_URL
 
 # Storage: "local" or "s3"
 STORAGE_BACKEND = (os.environ.get("STORAGE_BACKEND", "local") or "local").strip().lower()
@@ -44,31 +47,33 @@ STORAGE_BACKEND = (os.environ.get("STORAGE_BACKEND", "local") or "local").strip(
 # Local storage base dir (for STORAGE_BACKEND=local)
 STORAGE_DIR = Path(__file__).resolve().parent / "storage"
 
-# S3 (when STORAGE_BACKEND=s3)
-AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID", "").strip()
-AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY", "").strip()
-AWS_REGION = os.environ.get("AWS_REGION", "us-east-1").strip()
-S3_BUCKET = os.environ.get("S3_BUCKET", "").strip()
-S3_PREFIX = (os.environ.get("S3_PREFIX", "plan-typo-finder") or "plan-typo-finder").strip()
+# S3 (when STORAGE_BACKEND=s3). Empty = use defaults so S3 still works if only bucket is set.
+AWS_ACCESS_KEY_ID = (os.environ.get("AWS_ACCESS_KEY_ID") or "").strip()
+AWS_SECRET_ACCESS_KEY = (os.environ.get("AWS_SECRET_ACCESS_KEY") or "").strip()
+AWS_REGION = (os.environ.get("AWS_REGION") or "us-east-1").strip()
+S3_BUCKET = (os.environ.get("S3_BUCKET") or "").strip()
+S3_PREFIX = (os.environ.get("S3_PREFIX") or "plan-typo-finder").strip()
 
-# Use Celery for PDF jobs when CELERY_BROKER_URL is set and not disabled
-USE_CELERY = os.environ.get("USE_CELERY", "1").strip().lower() in ("1", "true", "yes")
+# Use Celery for PDF jobs when USE_CELERY=1 and CELERY_BROKER_URL non-empty; else thread pool.
+_USE_CELERY_RAW = (os.environ.get("USE_CELERY") or "1").strip().lower()
+USE_CELERY = _USE_CELERY_RAW in ("1", "true", "yes") and bool(CELERY_BROKER_URL)
 
-# Job retries (Celery and in-process)
-JOB_MAX_RETRIES = int(os.environ.get("JOB_MAX_RETRIES", "3"))
-JOB_RETRY_BACKOFF_SECONDS = int(os.environ.get("JOB_RETRY_BACKOFF_SECONDS", "60"))
-JOB_RETRY_BACKOFF_MAX_SECONDS = int(os.environ.get("JOB_RETRY_BACKOFF_MAX_SECONDS", "600"))
+# Job retries (Celery and in-process). Empty env = use default.
+JOB_MAX_RETRIES = int(os.environ.get("JOB_MAX_RETRIES") or "3")
+JOB_RETRY_BACKOFF_SECONDS = float(os.environ.get("JOB_RETRY_BACKOFF_SECONDS") or "60")
+JOB_RETRY_BACKOFF_MAX_SECONDS = float(os.environ.get("JOB_RETRY_BACKOFF_MAX_SECONDS") or "600")
 
-# Highlighted PDF cache and rate limit (reduces CPU under heavy use)
-# When REDIS_URL is set, cache and rate limit use Redis (shared across API workers). Else in-memory.
-PDF_HIGHLIGHT_CACHE_TTL_SECONDS = int(os.environ.get("PDF_HIGHLIGHT_CACHE_TTL_SECONDS", "300"))  # 5 min
-PDF_HIGHLIGHT_CACHE_MAX_ENTRIES = int(os.environ.get("PDF_HIGHLIGHT_CACHE_MAX_ENTRIES", "500"))
-PDF_HIGHLIGHT_RATE_LIMIT_PER_DOC = int(os.environ.get("PDF_HIGHLIGHT_RATE_LIMIT_PER_DOC", "60"))  # req/min per doc
-PDF_HIGHLIGHT_CACHE_REDIS_PREFIX = (os.environ.get("PDF_HIGHLIGHT_CACHE_REDIS_PREFIX", "typo:hl:") or "typo:hl:").strip()
-PDF_HIGHLIGHT_RATELIMIT_REDIS_PREFIX = (os.environ.get("PDF_HIGHLIGHT_RATELIMIT_REDIS_PREFIX", "typo:rlimit:") or "typo:rlimit:").strip()
+# Highlighted PDF cache and rate limit (reduces CPU under heavy use).
+# When REDIS_URL is non-empty, cache and rate limit use Redis; else in-memory.
+PDF_HIGHLIGHT_CACHE_TTL_SECONDS = int(os.environ.get("PDF_HIGHLIGHT_CACHE_TTL_SECONDS") or "300")
+PDF_HIGHLIGHT_CACHE_MAX_ENTRIES = int(os.environ.get("PDF_HIGHLIGHT_CACHE_MAX_ENTRIES") or "500")
+PDF_HIGHLIGHT_RATE_LIMIT_PER_DOC = int(os.environ.get("PDF_HIGHLIGHT_RATE_LIMIT_PER_DOC") or "60")
+PDF_HIGHLIGHT_CACHE_REDIS_PREFIX = (os.environ.get("PDF_HIGHLIGHT_CACHE_REDIS_PREFIX") or "typo:hl:").strip()
+PDF_HIGHLIGHT_RATELIMIT_REDIS_PREFIX = (os.environ.get("PDF_HIGHLIGHT_RATELIMIT_REDIS_PREFIX") or "typo:rlimit:").strip()
 
-# Max PDF upload size (MB). Enforced in upload handlers to reduce DoS/memory risk.
-MAX_UPLOAD_MB = max(1, int(os.environ.get("MAX_UPLOAD_MB", "100")))
+# Max PDF upload size (MB). Empty = 100.
+MAX_UPLOAD_MB = max(1, int(os.environ.get("MAX_UPLOAD_MB") or "100"))
 
 # When True, session cookie is set with secure and same_site (use behind HTTPS in production).
-USE_SECURE_SESSION_COOKIES = os.environ.get("USE_SECURE_SESSION_COOKIES", "0").strip().lower() in ("1", "true", "yes")
+_SECURE_COOKIES_RAW = (os.environ.get("USE_SECURE_SESSION_COOKIES") or "0").strip().lower()
+USE_SECURE_SESSION_COOKIES = _SECURE_COOKIES_RAW in ("1", "true", "yes")

@@ -1,6 +1,8 @@
 from __future__ import annotations
 import io
-import json, time
+import json
+import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional, Iterable
@@ -10,6 +12,9 @@ import fitz  # PyMuPDF
 from .typo.filters import FilterConfig, is_candidate, should_skip_before_ollama
 from .typo.spell import SpellChecker, load_allowlists
 from .typo.ollama_check import is_typo_with_context
+
+# Max concurrent Ollama requests per page (reduces wall-clock time when LLM is enabled).
+OLLAMA_POOL_WORKERS = 5
 
 
 def _draw_typo_rect(page: "fitz.Page", rect: fitz.Rect, *, width: float = 1.2, fill_opacity: float = 0.2) -> None:
@@ -61,7 +66,7 @@ def regenerate_annotated_pdf(
                 y1 = height_pts - bottom_pts
             pad = 1.5
             rect = fitz.Rect(x0 - pad, y0 - pad, x1 + pad, y1 + pad)
-            _draw_typo_rect(page, rect, width=1.2, fill_opacity=0.2)
+            _draw_typo_rect(page, rect, width=1.2, fill_opacity=0)  # stroke only; only the clicked highlight gets a fill
         output_pdf_path.parent.mkdir(parents=True, exist_ok=True)
         doc.save(str(output_pdf_path), garbage=4, deflate=True)
     finally:
@@ -82,7 +87,8 @@ def add_highlight_to_pdf(pdf_path: Path, page_num: int, bbox_pts: List[float]) -
         if page_num < 1 or page_num > len(doc):
             return pdf_path.read_bytes()
         page = doc.load_page(page_num - 1)
-        height_pts = float(getattr(page, "cropbox", None) or page.rect).height
+        page_rect = getattr(page, "cropbox", None) or page.rect
+        height_pts = float(page_rect.height)
         # PDF coords: bottom-left origin. Fitz: top-left origin.
         y0_fitz = height_pts - top_pts
         y1_fitz = height_pts - bottom_pts
@@ -207,6 +213,9 @@ def process_pdf(
         milestones = [0.35, 0.55, 0.75, 0.95]
         milestone_idx = 0
 
+        # Collect LLM candidates for this page so we can run them concurrently
+        ollama_candidates: List[Tuple[str, Optional[str], float, float, float, float, List[float], int]] = []
+
         for idx, w in enumerate(words):
             x0, y0, x1, y1, txt, block_no, line_no, word_no = w
             raw = txt
@@ -238,29 +247,7 @@ def process_pdf(
             else:
                 if should_skip_before_ollama(raw):
                     continue
-                if not is_typo_with_context(raw, ctx):
-                    non_typo_hits.append(NonTypoHit(
-                        page=page_num,
-                        word=raw,
-                        bbox=[float(x0), float(y0), float(x1), float(y1)],
-                        bbox_pts=bbox_pts,
-                        context=ctx,
-                    ))
-                    continue
-                # Typo: add hit and draw on this page
-                sugg = spell.suggestions(raw)
-                hit = TypoHit(
-                    page=page_num,
-                    word=raw,
-                    bbox=[float(x0), float(y0), float(x1), float(y1)],
-                    bbox_pts=bbox_pts,
-                    context=ctx,
-                    suggestions=sugg if sugg else None,
-                )
-                hits.append(hit)
-                pad = 1.5
-                rect = fitz.Rect(x0 - pad, y0 - pad, x1 + pad, y1 + pad)
-                _draw_typo_rect(page, rect, width=1.2, fill_opacity=0.2)
+                ollama_candidates.append((raw, ctx, float(x0), float(y0), float(x1), float(y1), bbox_pts, page_num))
 
             if progress_cb and total_words:
                 frac_done = (idx + 1) / total_words
@@ -275,6 +262,40 @@ def process_pdf(
                         pct=pct,
                     )
                     milestone_idx += 1
+
+        # Run Ollama checks concurrently for this page (order preserved via futures list)
+        if ollama_candidates:
+            with ThreadPoolExecutor(max_workers=OLLAMA_POOL_WORKERS) as executor:
+                futures = [executor.submit(is_typo_with_context, raw, ctx) for (raw, ctx, *_) in ollama_candidates]
+                is_typo_results = []
+                for f in futures:
+                    try:
+                        is_typo_results.append(f.result())
+                    except Exception:
+                        is_typo_results.append(True)
+            for (raw, ctx, x0, y0, x1, y1, bbox_pts, page_num), is_typo in zip(ollama_candidates, is_typo_results):
+                if not is_typo:
+                    non_typo_hits.append(NonTypoHit(
+                        page=page_num,
+                        word=raw,
+                        bbox=[x0, y0, x1, y1],
+                        bbox_pts=bbox_pts,
+                        context=ctx,
+                    ))
+                    continue
+                sugg = spell.suggestions(raw)
+                hit = TypoHit(
+                    page=page_num,
+                    word=raw,
+                    bbox=[x0, y0, x1, y1],
+                    bbox_pts=bbox_pts,
+                    context=ctx,
+                    suggestions=sugg if sugg else None,
+                )
+                hits.append(hit)
+                pad = 1.5
+                rect = fitz.Rect(x0 - pad, y0 - pad, x1 + pad, y1 + pad)
+                _draw_typo_rect(page, rect, width=1.2, fill_opacity=0)  # stroke only; only the clicked highlight gets a fill
 
         if progress_cb:
             pct = page_progress(pi, 1.0)

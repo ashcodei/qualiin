@@ -2,7 +2,7 @@
 from __future__ import annotations
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Iterator
 
 from .config import (
     STORAGE_BACKEND,
@@ -37,6 +37,12 @@ class StorageBackend(ABC):
     def get_path(self, key: str) -> Optional[Path]:
         """Return a local Path for the key if this backend is local (for FileResponse). Else None."""
         return None
+
+    def get_stream(self, key: str, chunk_size: int = 64 * 1024) -> Iterator[bytes]:
+        """Yield chunks for streaming (avoids loading full object into memory). Default uses get()."""
+        data = self.get(key)
+        for i in range(0, len(data), chunk_size):
+            yield data[i : i + chunk_size]
 
 
 class LocalStorage(StorageBackend):
@@ -91,6 +97,15 @@ class S3Storage(StorageBackend):
     def get(self, key: str) -> bytes:
         resp = self.client.get_object(Bucket=self.bucket, Key=self._object_key(key))
         return resp["Body"].read()
+
+    def get_stream(self, key: str, chunk_size: int = 64 * 1024) -> Iterator[bytes]:
+        resp = self.client.get_object(Bucket=self.bucket, Key=self._object_key(key))
+        body = resp["Body"]
+        while True:
+            chunk = body.read(chunk_size)
+            if not chunk:
+                break
+            yield chunk
 
     def put(self, key: str, data: bytes) -> None:
         self.client.put_object(Bucket=self.bucket, Key=self._object_key(key), Body=data)

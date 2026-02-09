@@ -11,6 +11,8 @@ backend/storage/
 *.sqlite
 *.sqlite3
 
+env.example
+
 # Python
 *.pyc
 __pycache__/
@@ -25,6 +27,7 @@ htmlcov/
 .env
 .env.*
 !.env.example
+env.example
 
 # OS & editors
 .DS_Store

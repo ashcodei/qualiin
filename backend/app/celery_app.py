@@ -5,20 +5,7 @@ import tempfile
 import traceback
 from pathlib import Path
 
-# Load .env file before importing config
-try:
-    from dotenv import load_dotenv
-    # Try loading from current directory and parent directories
-    load_dotenv()
-    # Also try loading from backend directory
-    backend_dir = Path(__file__).resolve().parent.parent
-    load_dotenv(backend_dir / ".env")
-    # Try project root
-    project_root = backend_dir.parent
-    load_dotenv(project_root / ".env")
-except ImportError:
-    pass
-
+# Rely on config.py to have already loaded .env (single place)
 from .config import (
     CELERY_BROKER_URL,
     USE_CELERY,
@@ -120,6 +107,12 @@ def process_pdf_task(
             )
             store.put(key_annotated, out_pdf.read_bytes())
             store.put(key_result, out_json.read_text(encoding="utf-8").encode("utf-8"))
+            typos = result.get("typos") or []
+            typo_words = list({str(t.get("word") or "").strip().lower() for t in typos if t.get("word")})
+            try:
+                store.put(f"typo_words/{doc_id}.json", json.dumps(typo_words).encode("utf-8"))
+            except Exception:
+                pass
             try:
                 store.delete(f"added_typos/{doc_id}.json")
             except Exception:

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any, Tuple, List, Callable, TypeVar
 from urllib.parse import urlparse, urlunparse
 
-from .config import DATABASE_URL, STORAGE_DIR, DB_MAX_RETRIES, DB_RETRY_SLEEP_SECONDS
+from .config import DATABASE_URL, STORAGE_DIR, DB_MAX_RETRIES, DB_RETRY_SLEEP_SECONDS, DB_POOL_SIZE
 
 # SQLite path (used only when DATABASE_URL is not set)
 DB_PATH = STORAGE_DIR / "app.db"
@@ -142,12 +142,39 @@ def _ensure_pg_database():
                 pass
 
 
+# PostgreSQL connection pool (lazy init when DATABASE_URL is set).
+_pg_pool = None
+
+
+def _get_pg_pool():
+    global _pg_pool
+    if _pg_pool is None:
+        import psycopg2.pool
+        _pg_pool = psycopg2.pool.ThreadedConnectionPool(
+            minconn=1,
+            maxconn=DB_POOL_SIZE,
+            dsn=DATABASE_URL,
+        )
+    return _pg_pool
+
+
+class _PgConnectionContext:
+    """Context manager that gets a connection from the pool and returns it on exit."""
+
+    def __enter__(self):
+        import psycopg2.extras
+        self.conn = _get_pg_pool().getconn()
+        self.conn.cursor_factory = psycopg2.extras.RealDictCursor
+        return self.conn
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        _get_pg_pool().putconn(self.conn)
+        return False
+
+
 def _pg_connect():
-    import psycopg2
-    from psycopg2.extras import RealDictCursor
-    conn = psycopg2.connect(DATABASE_URL)
-    conn.cursor_factory = RealDictCursor
-    return conn
+    """Return a context manager that yields a pooled PostgreSQL connection."""
+    return _PgConnectionContext()
 
 
 def _sqlite_connect():
@@ -780,6 +807,68 @@ def get_doc(
     return _with_db_retry(_run)
 
 
+def get_docs_status(
+    doc_ids: List[str],
+    owner_id: Optional[str] = None,
+    company_name: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Return minimal doc fields (doc_id, status, progress, message, typo_count) for polling. Same visibility as list_docs."""
+
+    if not doc_ids:
+        return []
+
+    def _run():
+        if _USE_PG:
+            with _pg_connect() as con:
+                cur = con.cursor()
+                if owner_id is not None and company_name is not None:
+                    cur.execute(
+                        """SELECT doc_id, status, progress, message, typo_count
+                           FROM documents WHERE doc_id = ANY(%s)
+                           AND ((owner_id = %s OR owner_id IS NULL) OR (visibility = 'public' AND company_name = %s))""",
+                        (doc_ids, owner_id, company_name),
+                    )
+                elif owner_id is not None:
+                    cur.execute(
+                        """SELECT doc_id, status, progress, message, typo_count
+                           FROM documents WHERE doc_id = ANY(%s)
+                           AND (owner_id = %s OR owner_id IS NULL)""",
+                        (doc_ids, owner_id),
+                    )
+                else:
+                    cur.execute(
+                        """SELECT doc_id, status, progress, message, typo_count
+                           FROM documents WHERE doc_id = ANY(%s)""",
+                        (doc_ids,),
+                    )
+                return [dict(r) for r in cur.fetchall()]
+        with _sqlite_connect() as con:
+            placeholders = ",".join("?" * len(doc_ids))
+            if owner_id is not None and company_name is not None:
+                rows = con.execute(
+                    f"""SELECT doc_id, status, progress, message, typo_count
+                        FROM documents WHERE doc_id IN ({placeholders})
+                        AND ((owner_id = ? OR owner_id IS NULL) OR (visibility = 'public' AND company_name = ?))""",
+                    doc_ids + [owner_id, company_name],
+                ).fetchall()
+            elif owner_id is not None:
+                rows = con.execute(
+                    f"""SELECT doc_id, status, progress, message, typo_count
+                        FROM documents WHERE doc_id IN ({placeholders})
+                        AND (owner_id = ? OR owner_id IS NULL)""",
+                    doc_ids + [owner_id],
+                ).fetchall()
+            else:
+                rows = con.execute(
+                    f"SELECT doc_id, status, progress, message, typo_count FROM documents WHERE doc_id IN ({placeholders})",
+                    doc_ids,
+                ).fetchall()
+            cols = ["doc_id", "status", "progress", "message", "typo_count"]
+            return [dict(zip(cols, r)) for r in rows]
+
+    return _with_db_retry(_run)
+
+
 def list_docs(
     owner_id: Optional[str] = None,
     company_name: Optional[str] = None,
@@ -990,6 +1079,31 @@ def delete_doc(doc_id: str) -> bool:
     return _with_db_retry(_run)
 
 
+def delete_docs_batch(doc_ids: List[str]) -> int:
+    """Delete typo_reviews and documents for the given doc_ids. Returns number of documents deleted."""
+    if not doc_ids:
+        return 0
+
+    def _run():
+        if _USE_PG:
+            with _pg_connect() as con:
+                cur = con.cursor()
+                cur.execute("DELETE FROM typo_reviews WHERE doc_id = ANY(%s)", (doc_ids,))
+                cur.execute("DELETE FROM documents WHERE doc_id = ANY(%s)", (doc_ids,))
+                n = cur.rowcount
+                con.commit()
+                return n
+        with _sqlite_connect() as con:
+            placeholders = ",".join("?" * len(doc_ids))
+            con.execute(f"DELETE FROM typo_reviews WHERE doc_id IN ({placeholders})", doc_ids)
+            cur = con.execute(f"DELETE FROM documents WHERE doc_id IN ({placeholders})", doc_ids)
+            n = cur.rowcount
+            con.commit()
+            return n
+
+    return _with_db_retry(_run)
+
+
 def set_doc_reviewed_by(doc_id: str, reviewed_by: str) -> None:
     """Set who reviewed the document."""
     def _run():
@@ -1090,7 +1204,7 @@ def get_allowlist_words(user_id: str) -> List[str]:
 
 
 def add_company_allowlist_words(company_name: str, words: List[str]) -> int:
-    """Add words to company allowlist (normalized, deduped). Returns number added."""
+    """Add words to company allowlist (normalized, deduped). Returns number added. Batch insert."""
     if not (company_name or "").strip() or not words:
         return 0
     normalized = list(dict.fromkeys(w.strip().lower() for w in words if w and isinstance(w, str)))
@@ -1099,32 +1213,28 @@ def add_company_allowlist_words(company_name: str, words: List[str]) -> int:
     cn = company_name.strip()
 
     def _run():
-        added = 0
         if _USE_PG:
             with _pg_connect() as con:
                 cur = con.cursor()
-                for w in normalized:
-                    try:
-                        cur.execute(
-                            "INSERT INTO company_allowlist (company_name, word) VALUES (%s, %s) ON CONFLICT (company_name, word) DO NOTHING",
-                            (cn, w),
-                        )
-                        if cur.rowcount:
-                            added += 1
-                    except Exception:
-                        pass
+                placeholders = ",".join(["(%s, %s)"] * len(normalized))
+                flat = [x for w in normalized for x in (cn, w)]
+                cur.execute(
+                    "INSERT INTO company_allowlist (company_name, word) VALUES " + placeholders
+                    + " ON CONFLICT (company_name, word) DO NOTHING RETURNING word",
+                    flat,
+                )
+                added = len(cur.fetchall())
                 con.commit()
-        else:
-            with _sqlite_connect() as con:
-                for w in normalized:
-                    cur = con.execute(
-                        "INSERT OR IGNORE INTO company_allowlist (company_name, word) VALUES (?, ?)",
-                        (cn, w),
-                    )
-                    if cur.rowcount > 0:
-                        added += 1
-                con.commit()
-        return added
+                return added
+        with _sqlite_connect() as con:
+            cur = con.execute(
+                "INSERT OR IGNORE INTO company_allowlist (company_name, word) VALUES "
+                + ",".join(["(?, ?)"] * len(normalized)),
+                [x for w in normalized for x in (cn, w)],
+            )
+            added = cur.rowcount
+            con.commit()
+            return added
 
     return _with_db_retry(_run)
 
@@ -1163,7 +1273,7 @@ def remove_company_allowlist_words(company_name: str, words: List[str]) -> int:
 
 
 def add_allowlist_words(user_id: str, words: List[str], prepend: bool = False) -> int:
-    """Add words to user's allowlist: company allowlist if user has company, else user allowlist. Returns number added."""
+    """Add words to user's allowlist: company allowlist if user has company, else user allowlist. Returns number added. Batch insert."""
     if not words:
         return 0
     company_name = get_user_company_name(user_id)
@@ -1174,32 +1284,28 @@ def add_allowlist_words(user_id: str, words: List[str], prepend: bool = False) -
         return 0
 
     def _run():
-        added = 0
         if _USE_PG:
             with _pg_connect() as con:
                 cur = con.cursor()
-                for w in normalized:
-                    try:
-                        cur.execute(
-                            "INSERT INTO user_allowlist (user_id, word) VALUES (%s, %s) ON CONFLICT (user_id, word) DO NOTHING",
-                            (user_id, w),
-                        )
-                        if cur.rowcount:
-                            added += 1
-                    except Exception:
-                        pass
+                placeholders = ",".join(["(%s, %s)"] * len(normalized))
+                flat = [x for w in normalized for x in (user_id, w)]
+                cur.execute(
+                    "INSERT INTO user_allowlist (user_id, word) VALUES " + placeholders
+                    + " ON CONFLICT (user_id, word) DO NOTHING RETURNING word",
+                    flat,
+                )
+                added = len(cur.fetchall())
                 con.commit()
-        else:
-            with _sqlite_connect() as con:
-                for w in normalized:
-                    cur = con.execute(
-                        "INSERT OR IGNORE INTO user_allowlist (user_id, word) VALUES (?, ?)",
-                        (user_id, w),
-                    )
-                    if cur.rowcount > 0:
-                        added += 1
-                con.commit()
-        return added
+                return added
+        with _sqlite_connect() as con:
+            cur = con.execute(
+                "INSERT OR IGNORE INTO user_allowlist (user_id, word) VALUES "
+                + ",".join(["(?, ?)"] * len(normalized)),
+                [x for w in normalized for x in (user_id, w)],
+            )
+            added = cur.rowcount
+            con.commit()
+            return added
 
     return _with_db_retry(_run)
 
@@ -1328,10 +1434,43 @@ def _build_review_status(reviews: Dict[str, Dict[str, Any]], total_typos: int) -
     }
 
 
+def _build_review_status_from_aggregate(reviewed_count: int, total_typos: int, reviewed_by: Optional[str]) -> Dict[str, Any]:
+    """Build review_status from aggregate query result (avoids loading all review rows)."""
+    return {
+        "is_complete": total_typos > 0 and reviewed_count >= total_typos,
+        "reviewed_count": reviewed_count,
+        "total_typos": total_typos,
+        "reviewed_by": reviewed_by,
+    }
+
+
 def get_doc_review_status(doc_id: str, total_typos: int) -> Dict[str, Any]:
-    """Return review status: { is_complete: bool, reviewed_count: int, reviewed_by: str | None }."""
-    reviews = get_typo_reviews_for_doc(doc_id)
-    return _build_review_status(reviews, total_typos)
+    """Return review status: { is_complete: bool, reviewed_count: int, reviewed_by: str | None }. Uses aggregate query."""
+    def _run():
+        if _USE_PG:
+            with _pg_connect() as con:
+                cur = con.cursor()
+                cur.execute(
+                    """SELECT COUNT(*) AS cnt,
+                              (SELECT reviewed_by FROM typo_reviews tr2
+                               WHERE tr2.doc_id = %s ORDER BY tr2.reviewed_at DESC NULLS LAST LIMIT 1) AS reviewed_by
+                       FROM typo_reviews WHERE doc_id = %s""",
+                    (doc_id, doc_id),
+                )
+                row = cur.fetchone()
+                cnt = int(row["cnt"]) if row else 0
+                reviewed_by = row["reviewed_by"] if row and row.get("reviewed_by") else None
+                return _build_review_status_from_aggregate(cnt, total_typos, reviewed_by)
+        with _sqlite_connect() as con:
+            row = con.execute(
+                """SELECT (SELECT COUNT(*) FROM typo_reviews WHERE doc_id = ?) AS cnt,
+                         (SELECT reviewed_by FROM typo_reviews WHERE doc_id = ? ORDER BY reviewed_at DESC LIMIT 1) AS reviewed_by""",
+                (doc_id, doc_id),
+            ).fetchone()
+            cnt = int(row[0]) if row else 0
+            reviewed_by = row[1] if row and len(row) > 1 and row[1] else None
+            return _build_review_status_from_aggregate(cnt, total_typos, reviewed_by)
+    return _with_db_retry(_run)
 
 
 def upsert_typo_review(
